@@ -540,7 +540,7 @@ for key in ('attendance_records', 'employees_dict', 'roster_dict', 'leave_dict',
 # ─── Sidebar ─────────────────────────────────────────────────────────────────
 
 with st.sidebar:
-    st.markdown('<div class="app-header">🗂️ ATD Viewer</div>', unsafe_allow_html=True)
+    st.markdown('<div class="app-header">Attendance Generator</div>', unsafe_allow_html=True)
     st.markdown('<div class="app-subheader">Attendance · Roster · Leave</div>', unsafe_allow_html=True)
     st.markdown('---')
 
@@ -597,7 +597,7 @@ with st.sidebar:
 
     # ── Merge Button
     can_merge = st.session_state.attendance_records is not None
-    if st.button("⚡ Merge All Data", disabled=not can_merge, use_container_width=True):
+    if st.button("Merge All Data", disabled=not can_merge, use_container_width=True):
         with st.spinner("Merging..."):
             merged = merge_records(
                 st.session_state.attendance_records,
@@ -665,25 +665,15 @@ if st.session_state.merged_df is not None:
 
     st.markdown('<br>', unsafe_allow_html=True)
 
-    # ── Filter Controls
-    col_filter, col_export = st.columns([3, 1])
-
-    with col_filter:
-        emp_names = ['-- All Employees --'] + sorted(df['Name'].unique().tolist()) if 'Name' in df.columns else ['-- All Employees --']
-        selected_emp = st.selectbox("Filter by Employee", emp_names, key='emp_filter')
-
-    with col_export:
-        st.markdown('<div style="height:28px"></div>', unsafe_allow_html=True)
-        view_df = df if selected_emp == '-- All Employees --' else df[df['Name'] == selected_emp]
-        excel_bytes = to_excel_bytes(view_df)
-        filename = "Attendance_Merged.xlsx" if selected_emp == '-- All Employees --' else f"Attendance_{selected_emp.replace(' ', '_')}.xlsx"
-        st.download_button(
-            label="⬇ Export Excel",
-            data=excel_bytes,
-            file_name=filename,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
-        )
+    # ── Export Button
+    view_df = df
+    excel_bytes = to_excel_bytes(view_df)
+    st.download_button(
+        label="⬇ Export Excel",
+        data=excel_bytes,
+        file_name="Attendance_Merged.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
     # ── Date range info
     if 'Date' in view_df.columns:
@@ -712,7 +702,7 @@ else:
             <div style="font-family:'IBM Plex Mono',monospace; font-size:3rem; color:#2a3550; margin-bottom:1rem;">⬤ ◯ ◯</div>
             <div style="font-family:'IBM Plex Mono',monospace; font-size:1rem; color:#3a4a6a; margin-bottom:0.5rem;">No data merged yet</div>
             <div style="font-family:'IBM Plex Sans',sans-serif; font-size:0.85rem; color:#2a3550;">
-                Upload files in the sidebar, then click <strong style="color:#5a7ab7;">⚡ Merge All Data</strong>
+                Upload files in the sidebar, then click <strong style="color:#5a7ab7;">Merge All Data</strong>
             </div>
         </div>
         """,
