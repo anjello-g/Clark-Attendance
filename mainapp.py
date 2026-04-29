@@ -1,10 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Wed Apr 29 15:32:05 2026
-
-@author: Angelo.Gaspe
-"""
-
 """
 Attendance Detailed Viewer - Streamlit Version
 Reads AttendanceReport Excel + Main Roster + Leave Transactions
@@ -510,38 +503,31 @@ DISPLAY_COLS = [
 
 # ─── Styling Function ────────────────────────────────────────────────────────
 
-def style_dataframe(df: pd.DataFrame):
-    """Apply conditional styling to the merged dataframe."""
-
-    def row_style(row):
-        styles = [''] * len(row)
-        cols = list(row.index)
-
-        absent_val = str(row.get('Absent', '0'))
-        on_leave_val = str(row.get('On Leave', '0'))
-        is_sched_val = str(row.get('Is Scheduled', '1'))
-
-        for i, col in enumerate(cols):
-            val = str(row[col])
-
-            if col == 'Name':
-                styles[i] = 'color: #7eb8f7; font-weight: 600;'
-            elif col == 'Date':
-                styles[i] = 'color: #4ade80;'
-            elif col in ('Late', 'Undertime') and val not in ('', '0', '0.0'):
-                styles[i] = 'color: #f87171; font-weight: 600;'
-            elif col in ('Project', 'Sub-Process', 'Role', 'Supervisor', 'Billable/Buffer', 'Tagging') and val:
-                styles[i] = 'background-color: #0d2b1f; color: #4ade80;'
-            elif col == 'On Leave' and on_leave_val == '1':
-                styles[i] = 'background-color: #2b1a00; color: #fb923c; font-weight: 600;'
-            elif col == 'Absent' and absent_val == '1':
-                styles[i] = 'background-color: #2b0a0a; color: #f87171; font-weight: 600;'
-            elif col == 'Is Scheduled' and is_sched_val == '0':
-                styles[i] = 'background-color: #1a1a2e; color: #6b7280;'
-
-        return styles
-
-    return df.style.apply(row_style, axis=1)
+def get_column_config():
+    """Return column_config for st.dataframe — works on all Streamlit versions."""
+    return {
+        'Name':              st.column_config.TextColumn('Name', width='medium'),
+        'ID Number':         st.column_config.TextColumn('ID Number', width='small'),
+        'Days Present':      st.column_config.NumberColumn('Days Present', width='small', format='%d'),
+        'Absent':            st.column_config.NumberColumn('Absent', width='small', format='%d'),
+        'Date':              st.column_config.TextColumn('Date', width='small'),
+        'Day':               st.column_config.TextColumn('Day', width='small'),
+        'Shift Type':        st.column_config.TextColumn('Shift Type', width='small'),
+        'Shift':             st.column_config.TextColumn('Shift', width='large'),
+        'Biologs':           st.column_config.TextColumn('Biologs', width='medium'),
+        'Late':              st.column_config.TextColumn('Late', width='small'),
+        'Undertime':         st.column_config.TextColumn('Undertime', width='small'),
+        'Total Hours Worked':st.column_config.TextColumn('Total Hours Worked', width='small'),
+        'Total Hours':       st.column_config.TextColumn('Total Hours', width='small'),
+        'Project':           st.column_config.TextColumn('Project', width='medium'),
+        'Sub-Process':       st.column_config.TextColumn('Sub-Process', width='medium'),
+        'Role':              st.column_config.TextColumn('Role', width='medium'),
+        'Supervisor':        st.column_config.TextColumn('Supervisor', width='medium'),
+        'Billable/Buffer':   st.column_config.TextColumn('Billable/Buffer', width='small'),
+        'Tagging':           st.column_config.TextColumn('Tagging', width='small'),
+        'On Leave':          st.column_config.NumberColumn('On Leave', width='small', format='%d'),
+        'Is Scheduled':      st.column_config.NumberColumn('Is Scheduled', width='small', format='%d'),
+    }
 
 
 # ─── Session State Init ──────────────────────────────────────────────────────
@@ -709,12 +695,12 @@ if st.session_state.merged_df is not None:
 
     # ── Data Table
     st.markdown('<div class="section-label">Records</div>', unsafe_allow_html=True)
-    styled = style_dataframe(view_df)
     st.dataframe(
-        styled,
+        view_df,
         use_container_width=True,
         height=520,
         hide_index=True,
+        column_config=get_column_config(),
     )
 
 else:
