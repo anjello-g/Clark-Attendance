@@ -622,7 +622,7 @@ with st.sidebar:
 # ─── Main Content ─────────────────────────────────────────────────────────────
 
 # Header
-st.markdown('<div class="app-header">Attendance Detailed Viewer</div>', unsafe_allow_html=True)
+st.markdown('<div class="app-header">Attendance Generator for Clark with Sprout and Roster</div>', unsafe_allow_html=True)
 st.markdown('<div class="app-subheader">Load files in the sidebar → Merge → Filter · Export</div>', unsafe_allow_html=True)
 
 # File status row
