@@ -11,8 +11,8 @@ from io import BytesIO
 # ─── Page Config ────────────────────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="Attendance Viewer",
-    page_icon="🗂️",
+    page_title="Clark Attendance",
+    page_icon="🐝",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -579,7 +579,7 @@ for key in ('attendance_records', 'employees_dict', 'roster_dict', 'leave_dict',
 # ─── Sidebar ─────────────────────────────────────────────────────────────────
 
 with st.sidebar:
-    st.markdown('<div class="app-header">🗂️ ATD Viewer</div>', unsafe_allow_html=True)
+    st.markdown('<div class="app-header">ATD CLK Generator</div>', unsafe_allow_html=True)
     st.markdown('<div class="app-subheader">Attendance · Roster · Leave</div>', unsafe_allow_html=True)
     st.markdown('---')
 
@@ -636,7 +636,7 @@ with st.sidebar:
 
     # ── Merge Button
     can_merge = st.session_state.attendance_records is not None
-    if st.button("⚡ Merge All Data", disabled=not can_merge, use_container_width=True):
+    if st.button("Merge All Data", disabled=not can_merge, use_container_width=True):
         with st.spinner("Merging..."):
             merged = merge_records(
                 st.session_state.attendance_records,
@@ -661,7 +661,7 @@ with st.sidebar:
 # ─── Main Content ─────────────────────────────────────────────────────────────
 
 # Header
-st.markdown('<div class="app-header">Attendance Detailed Viewer</div>', unsafe_allow_html=True)
+st.markdown('<div class="app-header">Attendance Generator of Clark using Sprout with Roster</div>', unsafe_allow_html=True)
 st.markdown('<div class="app-subheader">Load files in the sidebar → Merge → Filter · Export</div>', unsafe_allow_html=True)
 
 # File status row
@@ -741,7 +741,7 @@ else:
             <div style="font-family:'IBM Plex Mono',monospace; font-size:3rem; color:#2a3550; margin-bottom:1rem;">⬤ ◯ ◯</div>
             <div style="font-family:'IBM Plex Mono',monospace; font-size:1rem; color:#3a4a6a; margin-bottom:0.5rem;">No data merged yet</div>
             <div style="font-family:'IBM Plex Sans',sans-serif; font-size:0.85rem; color:#2a3550;">
-                Upload files in the sidebar, then click <strong style="color:#5a7ab7;">⚡ Merge All Data</strong>
+                Upload files in the sidebar, then click <strong style="color:#5a7ab7;">Merge All Data</strong>
             </div>
         </div>
         """,
