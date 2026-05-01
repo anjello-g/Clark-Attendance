@@ -1,6 +1,6 @@
 """
 Attendance Detailed Viewer - Streamlit Version
-Reads AttendanceReport Excel + Main Roster + Leave Transactions
+Reads AttendanceReport Excel + Main Roster + Leave Transactions + Holiday Override
 """
 
 import streamlit as st
@@ -359,6 +359,43 @@ def parse_leave(file_bytes):
     return leave_dict
 
 
+@st.cache_data(show_spinner=False)
+def parse_holiday_override(file_bytes):
+    """
+    Parse Holiday Override Excel.
+    Expected columns: Client, Sub-process (blank = all), Date
+    Returns a list of dicts with normalized values for matching.
+    """
+    df = pd.read_excel(BytesIO(file_bytes))
+    df.columns = [str(c).strip() for c in df.columns]
+
+    def find_col(target):
+        t = target.lower().replace('/', '').replace('-', '').replace(' ', '').replace('_', '')
+        for c in df.columns:
+            if c.lower().replace('/', '').replace('-', '').replace(' ', '').replace('_', '') == t:
+                return c
+        return target
+
+    client_col = find_col('Client')
+    sub_col = find_col('Sub-process')
+    date_col = find_col('Date')
+
+    overrides = []
+    for _, row in df.iterrows():
+        client = str(row[client_col]).strip() if pd.notna(row[client_col]) else ''
+        sub = str(row[sub_col]).strip() if pd.notna(row[sub_col]) else ''
+        date_val = normalize_date(row[date_col])
+
+        if client and date_val:
+            overrides.append({
+                'Client': client.upper(),
+                'Sub-Process': sub.upper(),
+                'Date': date_val
+            })
+
+    return overrides
+
+
 # ─── Business Logic ──────────────────────────────────────────────────────────
 
 def get_roster_info(roster_dict, id_number, date_str):
@@ -435,7 +472,34 @@ def is_scheduled(shift_value, days_present, biologs):
     return '1'
 
 
-def merge_records(records, roster_dict, leave_dict):
+def check_holiday_override(overrides, project, sub_process, date_str):
+    """
+    Check if a holiday override applies to this record.
+    Returns True if override matches.
+    """
+    if not overrides:
+        return False
+
+    project_upper = str(project).strip().upper() if project else ''
+    sub_upper = str(sub_process).strip().upper() if sub_process else ''
+    date_norm = normalize_date(date_str)
+
+    for ov in overrides:
+        # Match client (project)
+        if ov['Client'] != project_upper:
+            continue
+        # Match date
+        if ov['Date'] != date_norm:
+            continue
+        # Match sub-process: blank means all
+        if ov['Sub-Process'] and ov['Sub-Process'] != sub_upper:
+            continue
+        return True
+
+    return False
+
+
+def merge_records(records, roster_dict, leave_dict, holiday_overrides):
     merged = []
 
     for record in records:
@@ -495,6 +559,22 @@ def merge_records(records, roster_dict, leave_dict):
         # never mark Absent = 1 regardless of Days Present or On Leave value.
         if is_leave_shift(shift_upper):
             absent = '0'
+
+        # ─── Holiday Override Logic ──────────────────────────────────────────
+        # Check if holiday override applies to this record
+        if holiday_overrides and check_holiday_override(
+            holiday_overrides,
+            roster_info.get('Project', ''),
+            roster_info.get('Sub-Process', ''),
+            date_str
+        ):
+            # Only apply if employee is NOT truly present (Days Present = 0)
+            if days_present == '0':
+                absent = '0'
+                on_leave = '0'
+                sched = '0'
+                record['Shift'] = 'SPECIAL HOLIDAY'
+                shift_upper = 'SPECIAL HOLIDAY'
 
         merged.append({
             **record,
@@ -571,7 +651,7 @@ def get_column_config():
 
 # ─── Session State Init ──────────────────────────────────────────────────────
 
-for key in ('attendance_records', 'employees_dict', 'roster_dict', 'leave_dict', 'merged_df'):
+for key in ('attendance_records', 'employees_dict', 'roster_dict', 'leave_dict', 'holiday_overrides', 'merged_df'):
     if key not in st.session_state:
         st.session_state[key] = None
 
@@ -580,7 +660,7 @@ for key in ('attendance_records', 'employees_dict', 'roster_dict', 'leave_dict',
 
 with st.sidebar:
     st.markdown('<div class="app-header">ATD CLK Generator</div>', unsafe_allow_html=True)
-    st.markdown('<div class="app-subheader">Attendance · Roster · Leave</div>', unsafe_allow_html=True)
+    st.markdown('<div class="app-subheader">Attendance · Roster · Leave · Holiday Override</div>', unsafe_allow_html=True)
     st.markdown('---')
 
     # ── Attendance File
@@ -632,6 +712,22 @@ with st.sidebar:
             except Exception as e:
                 st.error(f"Error: {e}")
 
+    # ── Holiday Override File
+    st.markdown('### 04 · Holiday Override')
+    holiday_file = st.file_uploader(
+        "Holiday Override Excel", type=['xlsx', 'xls'], key='holiday_upload',
+        help="Columns: Client, Sub-process (leave blank for all), Date"
+    )
+    if holiday_file:
+        with st.spinner("Parsing holiday overrides..."):
+            try:
+                holiday_overrides = parse_holiday_override(holiday_file.read())
+                st.session_state.holiday_overrides = holiday_overrides
+                st.session_state.merged_df = None
+                st.success(f"✓ {len(holiday_overrides):,} holiday overrides")
+            except Exception as e:
+                st.error(f"Error: {e}")
+
     st.markdown('---')
 
     # ── Merge Button
@@ -641,7 +737,8 @@ with st.sidebar:
             merged = merge_records(
                 st.session_state.attendance_records,
                 st.session_state.roster_dict or {},
-                st.session_state.leave_dict or {}
+                st.session_state.leave_dict or {},
+                st.session_state.holiday_overrides or []
             )
             available_cols = [c for c in DISPLAY_COLS if c in merged[0]] if merged else DISPLAY_COLS
             st.session_state.merged_df = pd.DataFrame(merged)[available_cols]
@@ -653,7 +750,7 @@ with st.sidebar:
     st.markdown('---')
     st.markdown(
         '<div style="font-family:IBM Plex Mono;font-size:0.65rem;color:#3a4a6a;text-align:center;">'
-        'Roster + Leave are optional.<br>Attendance is required.</div>',
+        'Roster + Leave + Holiday Override are optional.<br>Attendance is required.</div>',
         unsafe_allow_html=True
     )
 
@@ -665,7 +762,7 @@ st.markdown('<div class="app-header">Attendance Generator of Clark using Sprout 
 st.markdown('<div class="app-subheader">Load files in the sidebar → Merge → Filter · Export</div>', unsafe_allow_html=True)
 
 # File status row
-c1, c2, c3 = st.columns(3)
+c1, c2, c3, c4 = st.columns(4)
 with c1:
     loaded = st.session_state.attendance_records is not None
     badge = 'badge-ok' if loaded else 'badge-none'
@@ -681,6 +778,11 @@ with c3:
     badge = 'badge-ok' if loaded else 'badge-none'
     label = f"{len(st.session_state.leave_dict):,} entries" if loaded else "not loaded"
     st.markdown(f'<div class="section-label">Leave</div><span class="badge {badge}">{"✓ " + label if loaded else "○ " + label}</span>', unsafe_allow_html=True)
+with c4:
+    loaded = st.session_state.holiday_overrides is not None
+    badge = 'badge-ok' if loaded else 'badge-none'
+    label = f"{len(st.session_state.holiday_overrides):,} overrides" if loaded else "not loaded"
+    st.markdown(f'<div class="section-label">Holiday Override</div><span class="badge {badge}">{"✓ " + label if loaded else "○ " + label}</span>', unsafe_allow_html=True)
 
 st.markdown('<br>', unsafe_allow_html=True)
 
