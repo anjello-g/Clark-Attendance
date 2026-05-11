@@ -499,13 +499,10 @@ def check_holiday_override(overrides, project, sub_process, date_str):
     date_norm = normalize_date(date_str)
 
     for ov in overrides:
-        # Match client (project)
         if ov['Client'] != project_upper:
             continue
-        # Match date
         if ov['Date'] != date_norm:
             continue
-        # Match sub-process: blank means all
         if ov['Sub-Process'] and ov['Sub-Process'] != sub_upper:
             continue
         return True
@@ -526,6 +523,7 @@ def merge_records(records, roster_dict, leave_dict, holiday_overrides):
             'Supervisor': '', 'Billable/Buffer': '', 'Tagging': ''
         }
 
+        # ── Initial Leave / Absent from Leave Transactions ─────────────────
         on_leave = '0'
         absent = '0'
         if leave_dict:
@@ -540,47 +538,55 @@ def merge_records(records, roster_dict, leave_dict, holiday_overrides):
                     else:
                         on_leave = '1'
 
+        # ── Scheduled flag from shift text ─────────────────────────────────
         sched = is_scheduled(record.get('Shift', ''), days_present, record.get('Biologs', ''))
+
+        # Clean-up: unscheduled + absent should not co-exist
         if sched == '0' and absent == '1':
             absent = '0'
 
         shift_upper = str(record.get('Shift', '')).strip().upper()
         biologs_upper = str(record.get('Biologs', '')).strip().upper()
 
+        # REST DAY exact + NO LOGS + On Leave → clear On Leave
         if shift_upper == 'REST DAY' and biologs_upper == 'NO LOGS' and on_leave == '1':
             on_leave = '0'
 
-        # Only force Absent=1 for ON LEAVE + NO LOGS if there is NO approved leave record.
-        # If a leave record exists, trust it (on_leave/absent already set above).
+        # Exact "ON LEAVE" shift + NO LOGS + NO leave record → Absent
         if shift_upper == 'ON LEAVE' and biologs_upper == 'NO LOGS':
             has_leave_record = leave_dict and get_leave_info(leave_dict, id_num, date_str) is not None
             if not has_leave_record:
                 on_leave = '0'
                 absent = '1'
 
-        # ─── Custom Edge-Case Rules ──────────────────────────────────────────
+        # ═══════════════════════════════════════════════════════════════════
+        #  USER RULES
+        # ═══════════════════════════════════════════════════════════════════
 
-        # Rule A: REST DAY AND HOLIDAY exact + On Leave + no logs → Is Scheduled = 1
-        # "agent is Scheduled but on Leave"
+        # Rule A ── REST DAY AND HOLIDAY exact + On Leave + no logs
+        #          → Is Scheduled = 1  (agent is Scheduled but on Leave)
         if (sched == '0' and on_leave == '1' and days_present == '0' and absent == '0' and
             shift_upper == 'REST DAY AND HOLIDAY' and biologs_upper == 'NO LOGS'):
             sched = '1'
 
-        # Rule D (Leave tagging): Half Day / Unpaid Leave time patterns + not on leave → On Leave = 1
-        # "Agent is Scheduled but on Leave"
+        # Rule D ── Time-pattern shift ending in (HALF DAY LEAVE) or (UNPAID LEAVE)
+        #            + not currently on leave → On Leave = 1
+        #            Example: 09:00 PM TO 06:00 AM (UNPAID LEAVE)
         if (sched == '1' and on_leave == '0' and days_present == '0' and absent == '0' and
             biologs_upper == 'NO LOGS' and has_time_pattern(shift_upper) and
             ('(HALF DAY LEAVE)' in shift_upper or '(UNPAID LEAVE)' in shift_upper)):
             on_leave = '1'
 
-        # Rule E (Not scheduled): Rest Day time patterns + not on leave → Is Scheduled = 0
-        # "Agent is not Scheduled"
+        # Rule E ── Time-pattern shift ending in (REST DAY) or (REST DAY AND HOLIDAY)
+        #            → Is Scheduled = 0  (agent is not Scheduled)
         if (sched == '1' and on_leave == '0' and days_present == '0' and absent == '0' and
             biologs_upper == 'NO LOGS' and has_time_pattern(shift_upper) and
             ('(REST DAY)' in shift_upper or '(REST DAY AND HOLIDAY)' in shift_upper)):
             sched = '0'
 
-        # Base absent logic for NO LOGS
+        # ── Base Absent logic for NO LOGS ──────────────────────────────────
+        # Only mark Absent when truly scheduled, no logs, and shift does NOT
+        # indicate a leave / holiday / rest exception.
         if sched == '1' and biologs_upper == 'NO LOGS':
             is_rest_variant = (
                 shift_upper == 'REST DAY' or
@@ -589,22 +595,24 @@ def merge_records(records, roster_dict, leave_dict, holiday_overrides):
                 ('REST DAY' in shift_upper and ' TO ' in shift_upper and ('AM' in shift_upper or 'PM' in shift_upper))
             )
             is_on_leave_exact = shift_upper == 'ON LEAVE'
-            if not is_rest_variant and not is_on_leave_exact:
+            is_leave_variant = is_leave_shift(shift_upper)
+
+            if not is_rest_variant and not is_on_leave_exact and not is_leave_variant:
                 absent = '1'
 
-        # Rule B: Scheduled + On Leave + Absent=1 + no logs → Absent = 0
-        # "Agent is Scheduled but on Leave, not absent"
+        # Rule B ── Scheduled + On Leave + Absent=1 + no logs
+        #            → Absent = 0  (agent is Scheduled but on Leave, not absent)
         if (sched == '1' and on_leave == '1' and days_present == '0' and absent == '1' and
             biologs_upper == 'NO LOGS'):
             absent = '0'
 
-        # Guard: shift patterns that are legitimate scheduled exceptions are never Absent
+        # Guard: shift patterns that signal holiday/leave are never Absent
         if is_leave_shift(shift_upper):
             absent = '0'
 
-        # Rule C (Absent tagging): Holiday variants + not on leave → Absent = 1
-        # "Agent is Scheduled but Absent"
-        # Placed AFTER is_leave_shift so it can override the absent=0 for this specific case
+        # Rule C ── Holiday variants + not on leave + no logs
+        #            → Absent = 1  (agent is Scheduled but Absent)
+        # Placed AFTER is_leave_shift guard so it can punch the hole back to 1
         if (sched == '1' and on_leave == '0' and days_present == '0' and absent == '0' and
             biologs_upper == 'NO LOGS' and
             (shift_upper == 'HOLIDAY' or
@@ -612,15 +620,15 @@ def merge_records(records, roster_dict, leave_dict, holiday_overrides):
               ('(HOLIDAY)' in shift_upper or '(PAID HOLIDAY)' in shift_upper or '(UNPAID HOLIDAY)' in shift_upper)))):
             absent = '1'
 
-        # ─── Holiday Override Logic ──────────────────────────────────────────
-        # Check if holiday override applies to this record
+        # ═══════════════════════════════════════════════════════════════════
+        #  HOLIDAY OVERRIDE (last — wins over everything)
+        # ═══════════════════════════════════════════════════════════════════
         if holiday_overrides and check_holiday_override(
             holiday_overrides,
             roster_info.get('Project', ''),
             roster_info.get('Sub-Process', ''),
             date_str
         ):
-            # Only apply if employee is NOT truly present (Days Present = 0)
             if days_present == '0':
                 absent = '0'
                 on_leave = '0'
@@ -727,7 +735,7 @@ with st.sidebar:
                 records, emp_dict = parse_attendance(att_file.read())
                 st.session_state.attendance_records = records
                 st.session_state.employees_dict = emp_dict
-                st.session_state.merged_df = None  # reset merged on new file
+                st.session_state.merged_df = None
                 st.success(f"✓ {len(records):,} records · {len(emp_dict)} employees")
             except Exception as e:
                 st.error(f"Error: {e}")
@@ -809,11 +817,9 @@ with st.sidebar:
 
 # ─── Main Content ─────────────────────────────────────────────────────────────
 
-# Header
 st.markdown('<div class="app-header">Attendance Generator of Clark using Sprout with Roster</div>', unsafe_allow_html=True)
 st.markdown('<div class="app-subheader">Load files in the sidebar → Merge → Filter · Export</div>', unsafe_allow_html=True)
 
-# File status row
 c1, c2, c3, c4 = st.columns(4)
 with c1:
     loaded = st.session_state.attendance_records is not None
@@ -838,11 +844,9 @@ with c4:
 
 st.markdown('<br>', unsafe_allow_html=True)
 
-# ── If merged data is available, show it
 if st.session_state.merged_df is not None:
     df = st.session_state.merged_df
 
-    # ── Metrics
     total_records = len(df)
     total_employees = df['Name'].nunique() if 'Name' in df.columns else 0
     total_absent = int(df['Absent'].astype(str).eq('1').sum()) if 'Absent' in df.columns else 0
@@ -858,7 +862,6 @@ if st.session_state.merged_df is not None:
 
     st.markdown('<br>', unsafe_allow_html=True)
 
-    # ── Export Button
     view_df = df
     excel_bytes = to_excel_bytes(view_df)
     st.download_button(
@@ -868,7 +871,6 @@ if st.session_state.merged_df is not None:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
-    # ── Date range info
     if 'Date' in view_df.columns:
         dates = view_df['Date'][view_df['Date'] != ''].tolist()
         if dates:
@@ -876,7 +878,6 @@ if st.session_state.merged_df is not None:
 
     st.markdown('<br>', unsafe_allow_html=True)
 
-    # ── Data Table
     st.markdown('<div class="section-label">Records</div>', unsafe_allow_html=True)
     st.dataframe(
         view_df,
@@ -887,13 +888,12 @@ if st.session_state.merged_df is not None:
     )
 
 else:
-    # ── Empty state
     st.markdown('<br>' * 3, unsafe_allow_html=True)
     st.markdown(
         """
         <div style="text-align:center; padding: 4rem 2rem;">
             <div style="font-family:'IBM Plex Mono',monospace; font-size:3rem; color:#2a3550; margin-bottom:1rem;">⬤ ◯ ◯</div>
-            <div style="font-family:'IBM Plex Mono',monospace; font-size:1rem; color:#3a4a6a; margin-bottom:0.5rem;">No data merged yet</div>
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:1rem; color:#3a4a8a; margin-bottom:0.5rem;">No data merged yet</div>
             <div style="font-family:'IBM Plex Sans',sans-serif; font-size:0.85rem; color:#2a3550;">
                 Upload files in the sidebar, then click <strong style="color:#5a7ab7;">Merge All Data</strong>
             </div>
