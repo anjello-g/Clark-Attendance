@@ -441,6 +441,20 @@ def is_leave_shift(shift_upper: str) -> bool:
     return False
 
 
+def has_time_pattern(shift_upper: str) -> bool:
+    """True if shift string contains a time range like 09:30 PM TO 06:30 AM."""
+    return ' TO ' in shift_upper and ('AM' in shift_upper or 'PM' in shift_upper)
+
+
+def is_night_shift(shift_upper: str) -> bool:
+    """True for night shifts where PM comes before AM (e.g. 09:30 PM TO 06:30 AM)."""
+    if not has_time_pattern(shift_upper):
+        return False
+    if 'PM' not in shift_upper or 'AM' not in shift_upper:
+        return False
+    return shift_upper.index('PM') < shift_upper.index('AM')
+
+
 def is_scheduled(shift_value, days_present, biologs):
     if not shift_value:
         return '1'
@@ -555,10 +569,44 @@ def merge_records(records, roster_dict, leave_dict, holiday_overrides):
             if not is_rest_variant and not is_on_leave_exact:
                 absent = '1'
 
+        # ─── Custom edge-case rules ──────────────────────────────────────────
+
+        # Rule 1: Half Day Unpaid Leave + On Leave + Absent + No Logs → Absent = 0
+        if (sched == '1' and has_time_pattern(shift_upper) and
+            '(HALF DAY UNPAID LEAVE)' in shift_upper and
+            on_leave == '1' and absent == '1' and biologs_upper == 'NO LOGS'):
+            absent = '0'
+
+        # Rule 2: Night shift + On Leave + Absent + No Logs → On Leave = 0
+        if (sched == '1' and is_night_shift(shift_upper) and
+            on_leave == '1' and absent == '1' and biologs_upper == 'NO LOGS'):
+            on_leave = '0'
+
+        # Rule 3: Rest Day variants + Days Present = 0 + Absent = 0 + No Logs → Is Scheduled = 0
+        if (sched == '1' and days_present == '0' and absent == '0' and
+            biologs_upper == 'NO LOGS' and has_time_pattern(shift_upper) and
+            ('(REST DAY AND HOLIDAY)' in shift_upper or '(REST DAY)' in shift_upper)):
+            sched = '0'
+
+        # Rule 4: Unpaid Leave / Half Day Leave + Days Present = 0 + Absent = 0 + No Logs → On Leave = 1
+        if (sched == '1' and days_present == '0' and absent == '0' and
+            biologs_upper == 'NO LOGS' and has_time_pattern(shift_upper) and
+            ('(UNPAID LEAVE)' in shift_upper or '(HALF DAY LEAVE)' in shift_upper)):
+            on_leave = '1'
+
         # Final override: if the shift itself signals a holiday/leave variant,
         # never mark Absent = 1 regardless of Days Present or On Leave value.
         if is_leave_shift(shift_upper):
             absent = '0'
+
+        # Rule 5: Holiday variants + Days Present = 0 + Absent = 0 + No Logs → Absent = 1
+        # Placed AFTER is_leave_shift so it can override the absent=0 for this specific case
+        if (sched == '1' and days_present == '0' and absent == '0' and
+            biologs_upper == 'NO LOGS' and
+            (shift_upper == 'HOLIDAY' or
+             (has_time_pattern(shift_upper) and
+              ('(HOLIDAY)' in shift_upper or '(PAID HOLIDAY)' in shift_upper or '(UNPAID HOLIDAY)' in shift_upper)))):
+            absent = '1'
 
         # ─── Holiday Override Logic ──────────────────────────────────────────
         # Check if holiday override applies to this record
