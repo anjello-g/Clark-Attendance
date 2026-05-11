@@ -446,15 +446,6 @@ def has_time_pattern(shift_upper: str) -> bool:
     return ' TO ' in shift_upper and ('AM' in shift_upper or 'PM' in shift_upper)
 
 
-def is_night_shift(shift_upper: str) -> bool:
-    """True for night shifts where PM comes before AM (e.g. 09:30 PM TO 06:30 AM)."""
-    if not has_time_pattern(shift_upper):
-        return False
-    if 'PM' not in shift_upper or 'AM' not in shift_upper:
-        return False
-    return shift_upper.index('PM') < shift_upper.index('AM')
-
-
 def is_scheduled(shift_value, days_present, biologs):
     if not shift_value:
         return '1'
@@ -523,6 +514,10 @@ def merge_records(records, roster_dict, leave_dict, holiday_overrides):
             'Supervisor': '', 'Billable/Buffer': '', 'Tagging': ''
         }
 
+        # ═══════════════════════════════════════════════════════════════════
+        #  PHASE 1 — INITIAL / BASE LOGIC
+        # ═══════════════════════════════════════════════════════════════════
+
         # ── Initial Leave / Absent from Leave Transactions ─────────────────
         on_leave = '0'
         absent = '0'
@@ -559,35 +554,7 @@ def merge_records(records, roster_dict, leave_dict, holiday_overrides):
                 on_leave = '0'
                 absent = '1'
 
-        # ═══════════════════════════════════════════════════════════════════
-        #  USER RULES  (order matters)
-        # ═══════════════════════════════════════════════════════════════════
-
-        # ── Rule D: UNPAID LEAVE / HALF DAY LEAVE time patterns → On Leave = 1
-        # Example: 09:00 PM TO 06:00 AM (UNPAID LEAVE)
-        #          09:00 PM TO 06:00 AM (HALF DAY LEAVE)
-        # "Agent is Scheduled but on Leave"
-        if (sched == '1' and on_leave == '0' and days_present == '0' and absent == '0' and
-            biologs_upper == 'NO LOGS' and has_time_pattern(shift_upper) and
-            ('(UNPAID LEAVE)' in shift_upper or '(HALF DAY LEAVE)' in shift_upper)):
-            on_leave = '1'
-
-        # ── Rule A: REST DAY AND HOLIDAY exact + On Leave + no logs
-        #            → Is Scheduled = 1  (agent is Scheduled but on Leave)
-        if (sched == '0' and on_leave == '1' and days_present == '0' and absent == '0' and
-            shift_upper == 'REST DAY AND HOLIDAY' and biologs_upper == 'NO LOGS'):
-            sched = '1'
-
-        # ── Rule E: Rest Day time patterns + not on leave → Is Scheduled = 0
-        #            "Agent is not Scheduled"
-        if (sched == '1' and on_leave == '0' and days_present == '0' and absent == '0' and
-            biologs_upper == 'NO LOGS' and has_time_pattern(shift_upper) and
-            ('(REST DAY)' in shift_upper or '(REST DAY AND HOLIDAY)' in shift_upper)):
-            sched = '0'
-
         # ── Base Absent logic for NO LOGS ──────────────────────────────────
-        # Only mark Absent when truly scheduled, no logs, and shift does NOT
-        # indicate a leave / holiday / rest exception.
         if sched == '1' and biologs_upper == 'NO LOGS':
             is_rest_variant = (
                 shift_upper == 'REST DAY' or
@@ -596,24 +563,45 @@ def merge_records(records, roster_dict, leave_dict, holiday_overrides):
                 ('REST DAY' in shift_upper and ' TO ' in shift_upper and ('AM' in shift_upper or 'PM' in shift_upper))
             )
             is_on_leave_exact = shift_upper == 'ON LEAVE'
-            is_leave_variant = is_leave_shift(shift_upper)
-
-            if not is_rest_variant and not is_on_leave_exact and not is_leave_variant:
+            if not is_rest_variant and not is_on_leave_exact:
                 absent = '1'
-
-        # ── Rule B: Scheduled + On Leave + Absent=1 + no logs
-        #            → Absent = 0  (agent is Scheduled but on Leave, not absent)
-        if (sched == '1' and on_leave == '1' and days_present == '0' and absent == '1' and
-            biologs_upper == 'NO LOGS'):
-            absent = '0'
 
         # Guard: shift patterns that signal holiday/leave are never Absent
         if is_leave_shift(shift_upper):
             absent = '0'
 
-        # ── Rule C: Holiday variants + not on leave + no logs
+        # ═══════════════════════════════════════════════════════════════════
+        #  PHASE 2 — USER OVERRIDE RULES (run after initial code finishes)
+        # ═════════════════════════════════════════════════════════════════==
+
+        # Rule A ── REST DAY AND HOLIDAY exact + On Leave + no logs
+        #            → Is Scheduled = 1  (agent is Scheduled but on Leave)
+        if (sched == '0' and on_leave == '1' and days_present == '0' and absent == '0' and
+            shift_upper == 'REST DAY AND HOLIDAY' and biologs_upper == 'NO LOGS'):
+            sched = '1'
+
+        # Rule E ── Time-pattern shift ending in (REST DAY) or (REST DAY AND HOLIDAY)
+        #            → Is Scheduled = 0  (agent is not Scheduled)
+        if (sched == '1' and on_leave == '0' and days_present == '0' and absent == '0' and
+            biologs_upper == 'NO LOGS' and has_time_pattern(shift_upper) and
+            ('(REST DAY)' in shift_upper or '(REST DAY AND HOLIDAY)' in shift_upper)):
+            sched = '0'
+
+        # Rule D ── Time-pattern shift ending in (UNPAID LEAVE) or (HALF DAY LEAVE)
+        #            → On Leave = 1  (Agent is Scheduled but on Leave)
+        if (sched == '1' and on_leave == '0' and days_present == '0' and absent == '0' and
+            biologs_upper == 'NO LOGS' and has_time_pattern(shift_upper) and
+            ('(UNPAID LEAVE)' in shift_upper or '(HALF DAY LEAVE)' in shift_upper)):
+            on_leave = '1'
+
+        # Rule B ── Scheduled + On Leave + Absent=1 + no logs
+        #            → Absent = 0  (agent is Scheduled but on Leave, not absent)
+        if (sched == '1' and on_leave == '1' and days_present == '0' and absent == '1' and
+            biologs_upper == 'NO LOGS'):
+            absent = '0'
+
+        # Rule C ── Holiday variants + not on leave + no logs
         #            → Absent = 1  (agent is Scheduled but Absent)
-        # Placed AFTER is_leave_shift guard so it can punch the hole back to 1
         if (sched == '1' and on_leave == '0' and days_present == '0' and absent == '0' and
             biologs_upper == 'NO LOGS' and
             (shift_upper == 'HOLIDAY' or
@@ -622,8 +610,8 @@ def merge_records(records, roster_dict, leave_dict, holiday_overrides):
             absent = '1'
 
         # ═══════════════════════════════════════════════════════════════════
-        #  HOLIDAY OVERRIDE (last — wins over everything)
-        # ═══════════════════════════════════════════════════════════════════
+        #  PHASE 3 — HOLIDAY OVERRIDE TABLE (absolute last)
+        # ═════════════════════════════════════════════════════════════════==
         if holiday_overrides and check_holiday_override(
             holiday_overrides,
             roster_info.get('Project', ''),
