@@ -558,6 +558,29 @@ def merge_records(records, roster_dict, leave_dict, holiday_overrides):
                 on_leave = '0'
                 absent = '1'
 
+        # ─── Custom Edge-Case Rules ──────────────────────────────────────────
+
+        # Rule A: REST DAY AND HOLIDAY exact + On Leave + no logs → Is Scheduled = 1
+        # "agent is Scheduled but on Leave"
+        if (sched == '0' and on_leave == '1' and days_present == '0' and absent == '0' and
+            shift_upper == 'REST DAY AND HOLIDAY' and biologs_upper == 'NO LOGS'):
+            sched = '1'
+
+        # Rule D (Leave tagging): Half Day / Unpaid Leave time patterns + not on leave → On Leave = 1
+        # "Agent is Scheduled but on Leave"
+        if (sched == '1' and on_leave == '0' and days_present == '0' and absent == '0' and
+            biologs_upper == 'NO LOGS' and has_time_pattern(shift_upper) and
+            ('(HALF DAY LEAVE)' in shift_upper or '(UNPAID LEAVE)' in shift_upper)):
+            on_leave = '1'
+
+        # Rule E (Not scheduled): Rest Day time patterns + not on leave → Is Scheduled = 0
+        # "Agent is not Scheduled"
+        if (sched == '1' and on_leave == '0' and days_present == '0' and absent == '0' and
+            biologs_upper == 'NO LOGS' and has_time_pattern(shift_upper) and
+            ('(REST DAY)' in shift_upper or '(REST DAY AND HOLIDAY)' in shift_upper)):
+            sched = '0'
+
+        # Base absent logic for NO LOGS
         if sched == '1' and biologs_upper == 'NO LOGS':
             is_rest_variant = (
                 shift_upper == 'REST DAY' or
@@ -569,39 +592,20 @@ def merge_records(records, roster_dict, leave_dict, holiday_overrides):
             if not is_rest_variant and not is_on_leave_exact:
                 absent = '1'
 
-        # ─── Custom edge-case rules ──────────────────────────────────────────
-
-        # Rule 1: Half Day Unpaid Leave + On Leave + Absent + No Logs → Absent = 0
-        if (sched == '1' and has_time_pattern(shift_upper) and
-            '(HALF DAY UNPAID LEAVE)' in shift_upper and
-            on_leave == '1' and absent == '1' and biologs_upper == 'NO LOGS'):
+        # Rule B: Scheduled + On Leave + Absent=1 + no logs → Absent = 0
+        # "Agent is Scheduled but on Leave, not absent"
+        if (sched == '1' and on_leave == '1' and days_present == '0' and absent == '1' and
+            biologs_upper == 'NO LOGS'):
             absent = '0'
 
-        # Rule 2: Night shift + On Leave + Absent + No Logs → On Leave = 0
-        if (sched == '1' and is_night_shift(shift_upper) and
-            on_leave == '1' and absent == '1' and biologs_upper == 'NO LOGS'):
-            on_leave = '0'
-
-        # Rule 3: Rest Day variants + Days Present = 0 + Absent = 0 + No Logs → Is Scheduled = 0
-        if (sched == '1' and days_present == '0' and absent == '0' and
-            biologs_upper == 'NO LOGS' and has_time_pattern(shift_upper) and
-            ('(REST DAY AND HOLIDAY)' in shift_upper or '(REST DAY)' in shift_upper)):
-            sched = '0'
-
-        # Rule 4: Unpaid Leave / Half Day Leave + Days Present = 0 + Absent = 0 + No Logs → On Leave = 1
-        if (sched == '1' and days_present == '0' and absent == '0' and
-            biologs_upper == 'NO LOGS' and has_time_pattern(shift_upper) and
-            ('(UNPAID LEAVE)' in shift_upper or '(HALF DAY LEAVE)' in shift_upper)):
-            on_leave = '1'
-
-        # Final override: if the shift itself signals a holiday/leave variant,
-        # never mark Absent = 1 regardless of Days Present or On Leave value.
+        # Guard: shift patterns that are legitimate scheduled exceptions are never Absent
         if is_leave_shift(shift_upper):
             absent = '0'
 
-        # Rule 5: Holiday variants + Days Present = 0 + Absent = 0 + No Logs → Absent = 1
+        # Rule C (Absent tagging): Holiday variants + not on leave → Absent = 1
+        # "Agent is Scheduled but Absent"
         # Placed AFTER is_leave_shift so it can override the absent=0 for this specific case
-        if (sched == '1' and days_present == '0' and absent == '0' and
+        if (sched == '1' and on_leave == '0' and days_present == '0' and absent == '0' and
             biologs_upper == 'NO LOGS' and
             (shift_upper == 'HOLIDAY' or
              (has_time_pattern(shift_upper) and
