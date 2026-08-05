@@ -7,6 +7,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from io import BytesIO
+import re
 
 # ─── Page Config ────────────────────────────────────────────────────────────
 
@@ -191,6 +192,80 @@ def normalize_id(id_val):
     if cleaned.isdigit():
         return str(int(cleaned))
     return cleaned
+
+
+# ─── Time / Late Calculation Helpers ─────────────────────────────────────────
+
+def time_to_minutes(time_str):
+    """Convert '9:30 PM' or '09:30 AM' to minutes since midnight."""
+    if not time_str:
+        return None
+    m = re.match(r'(\d{1,2}):(\d{2})\s*(AM|PM)', time_str.strip().upper())
+    if not m:
+        return None
+    h, mn, ap = int(m.group(1)), int(m.group(2)), m.group(3)
+    if ap == 'PM' and h != 12:
+        h += 12
+    elif ap == 'AM' and h == 12:
+        h = 0
+    return h * 60 + mn
+
+
+def get_shift_start_minutes(shift_str):
+    """Extract start time from shift string like '09:30 PM TO 06:30 AM'."""
+    if not shift_str or not isinstance(shift_str, str):
+        return None
+    s = shift_str.strip().upper()
+    if not has_time_pattern(s):
+        return None
+    m = re.search(r'(\d{1,2}:\d{2}\s*(?:AM|PM))', s)
+    if m:
+        return time_to_minutes(m.group(1))
+    return None
+
+
+def get_first_biolog_minutes(biologs_str):
+    """Extract first (IN) time from biologs string."""
+    if not biologs_str or not isinstance(biologs_str, str):
+        return None
+    b = biologs_str.strip().upper()
+    if b == 'NO LOGS' or b == '':
+        return None
+    times = re.findall(r'(\d{1,2}:\d{2}\s*(?:AM|PM))', b)
+    if times:
+        return time_to_minutes(times[0])
+    return None
+
+
+def compute_late_minutes(shift_str, biologs_str):
+    """
+    Calculate late minutes: first biolog time minus scheduled shift start.
+    Returns:
+        - str(minutes)  if actually late
+        - '0'           if on time or early (no negative values)
+        - ''            if uncalculable (no logs, no time-based shift, etc.)
+    """
+    sched = get_shift_start_minutes(shift_str)
+    actual = get_first_biolog_minutes(biologs_str)
+    if sched is None or actual is None:
+        return ''
+
+    diff = actual - sched
+
+    # Overnight safety: if diff is heavily negative (>12h "early") and shift
+    # spans midnight, the actual time is likely after midnight next day.
+    if diff < -720:
+        s = str(shift_str).strip().upper()
+        if ' TO ' in s:
+            times = re.findall(r'(\d{1,2}:\d{2}\s*(?:AM|PM))', s)
+            if len(times) >= 2:
+                end_mins = time_to_minutes(times[1])
+                if end_mins is not None and end_mins < sched:
+                    diff = actual + 1440 - sched
+
+    if diff > 0:
+        return str(diff)
+    return '0'
 
 
 # ─── Parsers ────────────────────────────────────────────────────────────────
@@ -509,6 +584,17 @@ def merge_records(records, roster_dict, leave_dict, holiday_overrides):
         date_str = record['Date']
         days_present = record['Days Present']
 
+        # ═══════════════════════════════════════════════════════════════════
+        #  CUSTOM LATE CALCULATION — replaces raw Late from Sprout
+        # ═══════════════════════════════════════════════════════════════════
+        computed_late = compute_late_minutes(
+            record.get('Shift', ''),
+            record.get('Biologs', '')
+        )
+        if computed_late != '':
+            record['Late'] = computed_late
+        # ═══════════════════════════════════════════════════════════════════
+
         roster_info = get_roster_info(roster_dict, id_num, date_str) if roster_dict else {
             'Project': '', 'Sub-Process': '', 'Role': '',
             'Supervisor': '', 'Billable/Buffer': '', 'Tagging': ''
@@ -683,7 +769,7 @@ def get_column_config():
         'Shift Type':        st.column_config.TextColumn('Shift Type', width='small'),
         'Shift':             st.column_config.TextColumn('Shift', width='large'),
         'Biologs':           st.column_config.TextColumn('Biologs', width='medium'),
-        'Late':              st.column_config.TextColumn('Late', width='small'),
+        'Late':              st.column_config.NumberColumn('Late (mins)', width='small', format='%d'),
         'Undertime':         st.column_config.TextColumn('Undertime', width='small'),
         'Total Hours Worked':st.column_config.TextColumn('Total Hours Worked', width='small'),
         'Total Hours':       st.column_config.TextColumn('Total Hours', width='small'),
