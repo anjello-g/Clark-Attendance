@@ -653,7 +653,10 @@ def merge_records(records, roster_dict, leave_dict, holiday_overrides):
         # ═══════════════════════════════════════════════════════════════════
         #  CUSTOM LATE CALCULATION — replaces raw Late from Sprout
         #  Uses a borrowed shift reference (_late_shift_ref) when the row's
-        #  own Shift text has no time info (ON LEAVE / HOLIDAY).
+        #  own Shift text has no time info (ON LEAVE / HOLIDAY). The same
+        #  _late_shift_ref is also swapped into the displayed Shift column
+        #  further down (Phase 4), so the export shows the actual schedule
+        #  used instead of the bare "ON LEAVE" / "HOLIDAY" label.
         # ═══════════════════════════════════════════════════════════════════
         shift_for_late = record.get('_late_shift_ref') or record.get('Shift', '')
         computed_late = compute_late_minutes(
@@ -779,6 +782,16 @@ def merge_records(records, roster_dict, leave_dict, holiday_overrides):
                 sched = '0'
                 record['Shift'] = 'SPECIAL HOLIDAY'
                 shift_upper = 'SPECIAL HOLIDAY'
+
+        # ═══════════════════════════════════════════════════════════════════
+        #  PHASE 4 — DISPLAY SWAP: show the borrowed/default schedule
+        #  instead of the bare "ON LEAVE" / "HOLIDAY" text in the Shift
+        #  column. On Leave / Absent / Is Scheduled above were already
+        #  decided using the original text, so this is purely cosmetic
+        #  and runs last so it never overrides the Holiday Override rule.
+        # ═════════════════════════════════════════════════════════════════==
+        if record.get('_late_shift_ref') and shift_upper in ('ON LEAVE', 'HOLIDAY'):
+            record['Shift'] = record['_late_shift_ref']
 
         merged.append({
             **record,
