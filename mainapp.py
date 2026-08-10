@@ -333,6 +333,12 @@ def parse_attendance(file_bytes):
         if records:
             emp_records = [r for r in records if r['Name'] == name]
             if emp_records:
+                # Resolve a usable shift reference (for late calc) on rows
+                # where the shift text itself carries no time (e.g. ON LEAVE,
+                # HOLIDAY) by borrowing the nearest past/future scheduled
+                # shift for this same employee, falling back to a default.
+                resolve_shift_fallback(emp_records)
+
                 employees_dict[name] = {
                     'Name': name,
                     'ID Number': normalize_id(id_num),
@@ -521,6 +527,66 @@ def has_time_pattern(shift_upper: str) -> bool:
     return ' TO ' in shift_upper and ('AM' in shift_upper or 'PM' in shift_upper)
 
 
+# ─── Shift Fallback (for Late calc on ON LEAVE / HOLIDAY rows) ───────────────
+
+DEFAULT_SHIFT = '09:00 PM To 06:00 AM'
+
+
+def needs_shift_fallback(shift_upper: str) -> bool:
+    """
+    True when a row's Shift text carries no time info and needs a borrowed
+    schedule to compute Late (exact ON LEAVE / HOLIDAY only).
+    REST DAY (and anything already time-based) is skipped.
+    """
+    if has_time_pattern(shift_upper):
+        return False
+    if shift_upper in ('REST DAY', 'REST DAY AND HOLIDAY'):
+        return False
+    return shift_upper in ('ON LEAVE', 'HOLIDAY')
+
+
+def resolve_shift_fallback(emp_records):
+    """
+    For an employee's chronologically-ordered records, fill in a
+    '_late_shift_ref' on rows whose Shift is ON LEAVE / HOLIDAY (no time
+    info) so Late can still be computed. Preference order:
+        1. Nearest PAST record for this employee with a time-based shift
+        2. Nearest FUTURE record for this employee with a time-based shift
+        3. DEFAULT_SHIFT fallback
+    REST DAY rows are left untouched (never resolved, never used as a
+    donor since they carry no time either).
+    Mutates emp_records in place.
+    """
+    n = len(emp_records)
+    for i, rec in enumerate(emp_records):
+        shift_upper = str(rec.get('Shift', '')).strip().upper()
+        if not needs_shift_fallback(shift_upper):
+            continue
+
+        resolved = None
+
+        # Nearest past scheduled (time-based) shift
+        for j in range(i - 1, -1, -1):
+            prev_upper = str(emp_records[j].get('Shift', '')).strip().upper()
+            if has_time_pattern(prev_upper):
+                resolved = emp_records[j]['Shift']
+                break
+
+        # Nearest future scheduled (time-based) shift
+        if resolved is None:
+            for j in range(i + 1, n):
+                next_upper = str(emp_records[j].get('Shift', '')).strip().upper()
+                if has_time_pattern(next_upper):
+                    resolved = emp_records[j]['Shift']
+                    break
+
+        # Final fallback
+        if resolved is None:
+            resolved = DEFAULT_SHIFT
+
+        rec['_late_shift_ref'] = resolved
+
+
 def is_scheduled(shift_value, days_present, biologs):
     if not shift_value:
         return '1'
@@ -586,9 +652,12 @@ def merge_records(records, roster_dict, leave_dict, holiday_overrides):
 
         # ═══════════════════════════════════════════════════════════════════
         #  CUSTOM LATE CALCULATION — replaces raw Late from Sprout
+        #  Uses a borrowed shift reference (_late_shift_ref) when the row's
+        #  own Shift text has no time info (ON LEAVE / HOLIDAY).
         # ═══════════════════════════════════════════════════════════════════
+        shift_for_late = record.get('_late_shift_ref') or record.get('Shift', '')
         computed_late = compute_late_minutes(
-            record.get('Shift', ''),
+            shift_for_late,
             record.get('Biologs', '')
         )
         if computed_late != '':
