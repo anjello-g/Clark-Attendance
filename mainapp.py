@@ -355,9 +355,9 @@ def parse_roster(file_bytes):
     """
     Parse roster file. Supports two sheet formats:
       1. 'Headcount' sheet (original format)
-         Columns: ECN, Date, Project, Sub-Process, Role, Supervisor, Billable/Buffer, Tagging
+         Columns: ECN, Date, Project, Sub-Process, Role, Supervisor, Billable/Buffer, Tagging, Active/Inactive
       2. 'Master' sheet (new format)
-         Columns: ECN, Date Exported, Client, Subprocess, Role, Supervisor, Billable/Buffer, Exemption Tagging
+         Columns: ECN, Date Exported, Client, Subprocess, Role, Supervisor, Billable/Buffer, Exemption Tagging, Active/Inactive
     Returns a dict keyed by 'ECN|Date' with roster info.
     """
     xls = pd.ExcelFile(BytesIO(file_bytes))
@@ -377,7 +377,8 @@ def parse_roster(file_bytes):
                 'role': 'Role',
                 'super': 'Supervisor',
                 'bill': 'Billable/Buffer',
-                'tagging': 'Tagging'
+                'tagging': 'Tagging',
+                'active': 'Active/Inactive'      # NEW
             }
         },
         {
@@ -390,7 +391,8 @@ def parse_roster(file_bytes):
                 'role': 'Role',
                 'super': 'Supervisor',
                 'bill': 'Billable/Buffer',
-                'tagging': 'Exemption Tagging'
+                'tagging': 'Exemption Tagging',
+                'active': 'Active/Inactive'      # NEW
             }
         }
     ]
@@ -430,7 +432,8 @@ def parse_roster(file_bytes):
                 'Role': str(row[actual_cols['role']]).strip() if pd.notna(row[actual_cols['role']]) else '',
                 'Supervisor': str(row[actual_cols['super']]).strip() if pd.notna(row[actual_cols['super']]) else '',
                 'Billable/Buffer': str(row[actual_cols['bill']]).strip() if pd.notna(row[actual_cols['bill']]) else '',
-                'Tagging': str(row[actual_cols['tagging']]).strip() if pd.notna(row[actual_cols['tagging']]) else ''
+                'Tagging': str(row[actual_cols['tagging']]).strip() if pd.notna(row[actual_cols['tagging']]) else '',
+                'Active/Inactive': str(row[actual_cols['active']]).strip() if pd.notna(row[actual_cols['active']]) else ''  # NEW
             }
 
     return roster_dict
@@ -525,7 +528,8 @@ def get_roster_info(roster_dict, id_number, date_str):
     key = f"{normalize_id(id_number)}|{date_str}"
     return roster_dict.get(key, {
         'Project': '', 'Sub-Process': '', 'Role': '',
-        'Supervisor': '', 'Billable/Buffer': '', 'Tagging': ''
+        'Supervisor': '', 'Billable/Buffer': '', 'Tagging': '',
+        'Active/Inactive': ''       # NEW
     })
 
 
@@ -711,7 +715,8 @@ def merge_records(records, roster_dict, leave_dict, holiday_overrides):
 
         roster_info = get_roster_info(roster_dict, id_num, date_str) if roster_dict else {
             'Project': '', 'Sub-Process': '', 'Role': '',
-            'Supervisor': '', 'Billable/Buffer': '', 'Tagging': ''
+            'Supervisor': '', 'Billable/Buffer': '', 'Tagging': '',
+            'Active/Inactive': ''       # NEW
         }
 
         # ═══════════════════════════════════════════════════════════════════
@@ -875,7 +880,7 @@ DISPLAY_COLS = [
     'Date', 'Day', 'Shift Type', 'Shift', 'Biologs',
     'Late', 'Undertime', 'Total Hours Worked', 'Total Hours',
     'Project', 'Sub-Process', 'Role', 'Supervisor', 'Billable/Buffer', 'Tagging',
-    'On Leave', 'Is Scheduled'
+    'On Leave', 'Is Scheduled', 'Active/Inactive'   # NEW: last column
 ]
 
 
@@ -905,6 +910,7 @@ def get_column_config():
         'Tagging':           st.column_config.TextColumn('Tagging', width='small'),
         'On Leave':          st.column_config.NumberColumn('On Leave', width='small', format='%d'),
         'Is Scheduled':      st.column_config.NumberColumn('Is Scheduled', width='small', format='%d'),
+        'Active/Inactive':   st.column_config.TextColumn('Active/Inactive', width='small'),   # NEW
     }
 
 
