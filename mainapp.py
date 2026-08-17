@@ -352,44 +352,86 @@ def parse_attendance(file_bytes):
 
 @st.cache_data(show_spinner=False)
 def parse_roster(file_bytes):
-    df = pd.read_excel(BytesIO(file_bytes), sheet_name='Headcount')
-    df.columns = [str(c).strip() for c in df.columns]
-
-    def find_col(target):
-        t = target.lower().replace('/', '').replace('-', '').replace(' ', '')
-        for c in df.columns:
-            if c.lower().replace('/', '').replace('-', '').replace(' ', '') == t:
-                return c
-        return target
-
-    cols = {
-        'ecn': find_col('ECN'),
-        'date': find_col('Date'),
-        'project': find_col('Project'),
-        'sub': find_col('Sub-Process'),
-        'role': find_col('Role'),
-        'super': find_col('Supervisor'),
-        'bill': find_col('Billable/Buffer'),
-        'tagging': find_col('Tagging')
-    }
-
-    df['_ecn'] = df[cols['ecn']].astype(str).str.strip().apply(normalize_id)
-    df['_date'] = df[cols['date']].apply(normalize_date)
-
-    valid = (df['_ecn'] != '') & (df['_date'] != '')
-    df = df[valid]
+    """
+    Parse roster file. Supports two sheet formats:
+      1. 'Headcount' sheet (original format)
+         Columns: ECN, Date, Project, Sub-Process, Role, Supervisor, Billable/Buffer, Tagging
+      2. 'Master' sheet (new format)
+         Columns: ECN, Date Exported, Client, Subprocess, Role, Supervisor, Billable/Buffer, Exemption Tagging
+    Returns a dict keyed by 'ECN|Date' with roster info.
+    """
+    xls = pd.ExcelFile(BytesIO(file_bytes))
+    sheet_names = xls.sheet_names
 
     roster_dict = {}
-    for _, row in df.iterrows():
-        key = f"{row['_ecn']}|{row['_date']}"
-        roster_dict[key] = {
-            'Project': str(row[cols['project']]).strip() if pd.notna(row[cols['project']]) else '',
-            'Sub-Process': str(row[cols['sub']]).strip() if pd.notna(row[cols['sub']]) else '',
-            'Role': str(row[cols['role']]).strip() if pd.notna(row[cols['role']]) else '',
-            'Supervisor': str(row[cols['super']]).strip() if pd.notna(row[cols['super']]) else '',
-            'Billable/Buffer': str(row[cols['bill']]).strip() if pd.notna(row[cols['bill']]) else '',
-            'Tagging': str(row[cols['tagging']]).strip() if pd.notna(row[cols['tagging']]) else ''
+
+    # Define both formats with their sheet name and column mapping
+    formats = [
+        {
+            'sheet': 'Headcount',
+            'columns': {
+                'ecn': 'ECN',
+                'date': 'Date',
+                'project': 'Project',
+                'sub': 'Sub-Process',
+                'role': 'Role',
+                'super': 'Supervisor',
+                'bill': 'Billable/Buffer',
+                'tagging': 'Tagging'
+            }
+        },
+        {
+            'sheet': 'Master',
+            'columns': {
+                'ecn': 'ECN',
+                'date': 'Date Exported',
+                'project': 'Client',
+                'sub': 'Subprocess',
+                'role': 'Role',
+                'super': 'Supervisor',
+                'bill': 'Billable/Buffer',
+                'tagging': 'Exemption Tagging'
+            }
         }
+    ]
+
+    for fmt in formats:
+        if fmt['sheet'] not in sheet_names:
+            continue
+
+        df = pd.read_excel(BytesIO(file_bytes), sheet_name=fmt['sheet'])
+        df.columns = [str(c).strip() for c in df.columns]
+
+        # Normalize column names for matching
+        actual_cols = {}
+        for key, target in fmt['columns'].items():
+            t_norm = target.lower().replace('/', '').replace('-', '').replace(' ', '').replace('_', '')
+            found = None
+            for c in df.columns:
+                c_norm = c.lower().replace('/', '').replace('-', '').replace(' ', '').replace('_', '')
+                if c_norm == t_norm:
+                    found = c
+                    break
+            actual_cols[key] = found if found else target  # fallback to target name
+
+        # Extract and normalize key columns
+        df['_ecn'] = df[actual_cols['ecn']].astype(str).str.strip().apply(normalize_id)
+        df['_date'] = df[actual_cols['date']].apply(normalize_date)
+
+        valid = (df['_ecn'] != '') & (df['_date'] != '')
+        df = df[valid]
+
+        # Build roster dictionary
+        for _, row in df.iterrows():
+            key = f"{row['_ecn']}|{row['_date']}"
+            roster_dict[key] = {
+                'Project': str(row[actual_cols['project']]).strip() if pd.notna(row[actual_cols['project']]) else '',
+                'Sub-Process': str(row[actual_cols['sub']]).strip() if pd.notna(row[actual_cols['sub']]) else '',
+                'Role': str(row[actual_cols['role']]).strip() if pd.notna(row[actual_cols['role']]) else '',
+                'Supervisor': str(row[actual_cols['super']]).strip() if pd.notna(row[actual_cols['super']]) else '',
+                'Billable/Buffer': str(row[actual_cols['bill']]).strip() if pd.notna(row[actual_cols['bill']]) else '',
+                'Tagging': str(row[actual_cols['tagging']]).strip() if pd.notna(row[actual_cols['tagging']]) else ''
+            }
 
     return roster_dict
 
@@ -901,7 +943,7 @@ with st.sidebar:
     st.markdown('### 02 · Roster')
     roster_file = st.file_uploader(
         "Roster Excel", type=['xlsx', 'xls'], key='roster_upload',
-        help="Must contain a 'Headcount' sheet"
+        help="Must contain a 'Headcount' or 'Master' sheet"
     )
     if roster_file:
         with st.spinner("Parsing roster..."):
