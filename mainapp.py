@@ -2,7 +2,6 @@
 Attendance Detailed Viewer - Streamlit Version
 Reads AttendanceReport Excel + Main Roster + Leave Transactions + Holiday Override
 """
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -10,7 +9,6 @@ from io import BytesIO
 import re
 
 # ─── Page Config ────────────────────────────────────────────────────────────
-
 st.set_page_config(
     page_title="Clark Attendance",
     page_icon="🐝",
@@ -19,21 +17,17 @@ st.set_page_config(
 )
 
 # ─── Custom CSS ─────────────────────────────────────────────────────────────
-
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600;700&display=swap');
-
 html, body, [class*="css"] {
     font-family: 'IBM Plex Sans', sans-serif;
 }
-
 /* App background */
 .stApp {
     background-color: #0f1117;
     color: #e8eaf0;
 }
-
 /* Sidebar */
 [data-testid="stSidebar"] {
     background-color: #161b27;
@@ -50,7 +44,6 @@ html, body, [class*="css"] {
     padding-bottom: 6px;
     margin-top: 1.5rem;
 }
-
 /* Metric cards */
 [data-testid="metric-container"] {
     background: #1a2035;
@@ -71,7 +64,6 @@ html, body, [class*="css"] {
     font-size: 1.6rem !important;
     font-weight: 600;
 }
-
 /* Buttons */
 .stButton > button {
     background: #1e3a5f;
@@ -91,7 +83,6 @@ html, body, [class*="css"] {
     color: #d0e8ff;
     border-color: #5588cc;
 }
-
 /* File uploader */
 [data-testid="stFileUploader"] {
     background: #161b27;
@@ -106,7 +97,6 @@ html, body, [class*="css"] {
     letter-spacing: 0.08em;
     text-transform: uppercase;
 }
-
 /* Selectbox */
 [data-testid="stSelectbox"] label {
     color: #7eb8f7 !important;
@@ -115,21 +105,18 @@ html, body, [class*="css"] {
     letter-spacing: 0.08em;
     text-transform: uppercase;
 }
-
 /* Dataframe */
 [data-testid="stDataFrame"] {
     border: 1px solid #2a3550;
     border-radius: 8px;
     overflow: hidden;
 }
-
 /* Success/error/info */
 .stSuccess, .stInfo, .stWarning, .stError {
     border-radius: 6px;
     font-family: 'IBM Plex Mono', monospace;
     font-size: 0.82rem;
 }
-
 /* Header */
 .app-header {
     font-family: 'IBM Plex Mono', monospace;
@@ -145,7 +132,6 @@ html, body, [class*="css"] {
     color: #5a6a8a;
     margin-bottom: 1.5rem;
 }
-
 /* Section labels */
 .section-label {
     font-family: 'IBM Plex Mono', monospace;
@@ -155,7 +141,6 @@ html, body, [class*="css"] {
     text-transform: uppercase;
     margin-bottom: 0.3rem;
 }
-
 /* Status badge */
 .badge {
     display: inline-block;
@@ -168,14 +153,12 @@ html, body, [class*="css"] {
 }
 .badge-ok   { background: #0d2b1f; color: #4ade80; border: 1px solid #166534; }
 .badge-none { background: #1a1a2e; color: #5a6a8a; border: 1px solid #2a2f3e; }
-
 /* Divider */
 hr { border-color: #2a2f3e !important; }
 </style>
 """, unsafe_allow_html=True)
 
 # ─── Helper Functions ────────────────────────────────────────────────────────
-
 def normalize_date(date_val):
     if pd.isna(date_val) or date_val == '' or date_val is None:
         return ''
@@ -183,7 +166,6 @@ def normalize_date(date_val):
         return pd.to_datetime(str(date_val).strip()).strftime('%m/%d/%Y')
     except:
         return str(date_val).strip()
-
 
 def normalize_id(id_val):
     if pd.isna(id_val) or id_val == '' or id_val is None:
@@ -193,9 +175,7 @@ def normalize_id(id_val):
         return str(int(cleaned))
     return cleaned
 
-
 # ─── Time / Late Calculation Helpers ─────────────────────────────────────────
-
 def time_to_minutes(time_str):
     """Convert '9:30 PM' or '09:30 AM' to minutes since midnight."""
     if not time_str:
@@ -210,7 +190,6 @@ def time_to_minutes(time_str):
         h = 0
     return h * 60 + mn
 
-
 def get_shift_start_minutes(shift_str):
     """Extract start time from shift string like '09:30 PM TO 06:30 AM'."""
     if not shift_str or not isinstance(shift_str, str):
@@ -222,7 +201,6 @@ def get_shift_start_minutes(shift_str):
     if m:
         return time_to_minutes(m.group(1))
     return None
-
 
 def get_first_biolog_minutes(biologs_str):
     """Extract first (IN) time from biologs string."""
@@ -236,7 +214,6 @@ def get_first_biolog_minutes(biologs_str):
         return time_to_minutes(times[0])
     return None
 
-
 def compute_late_minutes(shift_str, biologs_str):
     """
     Calculate late minutes: first biolog time minus scheduled shift start.
@@ -249,9 +226,7 @@ def compute_late_minutes(shift_str, biologs_str):
     actual = get_first_biolog_minutes(biologs_str)
     if sched is None or actual is None:
         return ''
-
     diff = actual - sched
-
     # Overnight safety: if diff is heavily negative (>12h "early") and shift
     # spans midnight, the actual time is likely after midnight next day.
     if diff < -720:
@@ -262,58 +237,44 @@ def compute_late_minutes(shift_str, biologs_str):
                 end_mins = time_to_minutes(times[1])
                 if end_mins is not None and end_mins < sched:
                     diff = actual + 1440 - sched
-
     if diff > 0:
         return str(diff)
     return '0'
 
-
 # ─── Parsers ────────────────────────────────────────────────────────────────
-
 @st.cache_data(show_spinner=False)
 def parse_attendance(file_bytes):
     df = pd.read_excel(BytesIO(file_bytes), sheet_name='Detailed', header=None)
     values = df.values
     n_rows = len(values)
-
     name_mask = values[:, 0] == 'Name:'
     name_indices = np.where(name_mask)[0]
-
     records = []
     employees_dict = {}
-
     for idx in name_indices:
         if idx + 4 >= n_rows:
             continue
-
         name = str(values[idx, 1]).strip() if pd.notna(values[idx, 1]) else ''
         id_num = str(values[idx + 1, 1]).strip() if pd.notna(values[idx + 1, 1]) else ''
         days_present_total = str(values[idx + 2, 1]).strip() if pd.notna(values[idx + 2, 1]) else ''
         days_absent_total = str(values[idx + 3, 1]).strip() if pd.notna(values[idx + 3, 1]) else ''
-
         data_start = idx + 5
         if data_start >= n_rows:
             continue
-
         end_idx = data_start
         while end_idx < n_rows:
             first_cell = str(values[end_idx, 0]).strip() if pd.notna(values[end_idx, 0]) else ''
             if first_cell in ('Totals:', 'Name:', '') or (pd.isna(values[end_idx, 0]) and pd.isna(values[end_idx, 1])):
                 break
             end_idx += 1
-
         if end_idx <= data_start:
             continue
-
         data_slice = values[data_start:end_idx]
-
         for row in data_slice:
             if pd.isna(row[0]):
                 continue
-
             biologs = str(row[4]).strip() if len(row) > 4 and pd.notna(row[4]) else ''
             is_absent = (biologs.upper() == 'NO LOGS' or biologs == '')
-
             record = {
                 'Name': name,
                 'ID Number': normalize_id(id_num),
@@ -329,7 +290,6 @@ def parse_attendance(file_bytes):
                 'Total Hours': str(row[8]).strip() if len(row) > 8 and pd.notna(row[8]) else ''
             }
             records.append(record)
-
         if records:
             emp_records = [r for r in records if r['Name'] == name]
             if emp_records:
@@ -338,7 +298,6 @@ def parse_attendance(file_bytes):
                 # HOLIDAY) by borrowing the nearest past/future scheduled
                 # shift for this same employee, falling back to a default.
                 resolve_shift_fallback(emp_records)
-
                 employees_dict[name] = {
                     'Name': name,
                     'ID Number': normalize_id(id_num),
@@ -346,26 +305,23 @@ def parse_attendance(file_bytes):
                     'Days Absent': days_absent_total,
                     'Records': emp_records
                 }
-
     return records, employees_dict
-
 
 @st.cache_data(show_spinner=False)
 def parse_roster(file_bytes):
     """
     Parse roster file. Supports two sheet formats:
       1. 'Headcount' sheet (original format)
-         Columns: ECN, Date, Project, Sub-Process, Role, Supervisor, Billable/Buffer, Tagging, Active/Inactive
+         Columns: ECN, Date, Project, Sub-Process, Role, Supervisor, Billable/Buffer, Tagging, Active/Inactive, Location
       2. 'Master' sheet (new format)
-         Columns: ECN, Date Exported, Client, Subprocess, Role, Supervisor, Billable/Buffer, Exemption Tagging, Active/Inactive
-    Returns a dict keyed by 'ECN|Date' with roster info.
+         Columns: ECN, Date Exported, Client, Subprocess, Role, Supervisor, Billable/Buffer, Exemption Tagging, Active/Inactive, Location
+    Also looks for Location / Site / Office / Work Location column.
+    Returns a dict keyed by 'ECN|Date' with roster info (including Location).
     """
     xls = pd.ExcelFile(BytesIO(file_bytes))
     sheet_names = xls.sheet_names
-
     roster_dict = {}
 
-    # Define both formats with their sheet name and column mapping
     formats = [
         {
             'sheet': 'Headcount',
@@ -378,7 +334,8 @@ def parse_roster(file_bytes):
                 'super': 'Supervisor',
                 'bill': 'Billable/Buffer',
                 'tagging': 'Tagging',
-                'active': 'Active/Inactive'      # NEW
+                'active': 'Active/Inactive',
+                'location': 'Location'
             }
         },
         {
@@ -392,10 +349,28 @@ def parse_roster(file_bytes):
                 'super': 'Supervisor',
                 'bill': 'Billable/Buffer',
                 'tagging': 'Exemption Tagging',
-                'active': 'Active/Inactive'      # NEW
+                'active': 'Active/Inactive',
+                'location': 'Location'
             }
         }
     ]
+
+    def map_location(raw):
+        """Apply the Location mapping rules."""
+        if pd.isna(raw) or str(raw).strip() == '':
+            return 'Clark'
+        val = str(raw).strip().upper()
+        if val == 'WFH':
+            return 'WFH'
+        if val == 'BATANGAS':
+            return 'Batangas'
+        if val == 'BACOLOD':
+            return 'Bacolod'
+        if val == 'ORTIGAS':
+            return 'Ortigas'
+        if val == 'ILOILO':
+            return 'Iloilo'
+        return 'Clark'
 
     for fmt in formats:
         if fmt['sheet'] not in sheet_names:
@@ -404,7 +379,7 @@ def parse_roster(file_bytes):
         df = pd.read_excel(BytesIO(file_bytes), sheet_name=fmt['sheet'])
         df.columns = [str(c).strip() for c in df.columns]
 
-        # Normalize column names for matching
+        # Flexible column matching
         actual_cols = {}
         for key, target in fmt['columns'].items():
             t_norm = target.lower().replace('/', '').replace('-', '').replace(' ', '').replace('_', '')
@@ -414,18 +389,32 @@ def parse_roster(file_bytes):
                 if c_norm == t_norm:
                     found = c
                     break
-            actual_cols[key] = found if found else target  # fallback to target name
+            # Extra aliases for Location
+            if key == 'location' and found is None:
+                for alias in ['site', 'office', 'worklocation', 'work location', 'location']:
+                    for c in df.columns:
+                        c_norm = c.lower().replace('/', '').replace('-', '').replace(' ', '').replace('_', '')
+                        if alias.replace(' ', '') == c_norm:
+                            found = c
+                            break
+                    if found:
+                        break
+            actual_cols[key] = found if found else target
 
-        # Extract and normalize key columns
+        # Extract key columns
         df['_ecn'] = df[actual_cols['ecn']].astype(str).str.strip().apply(normalize_id)
         df['_date'] = df[actual_cols['date']].apply(normalize_date)
-
         valid = (df['_ecn'] != '') & (df['_date'] != '')
         df = df[valid]
 
-        # Build roster dictionary
         for _, row in df.iterrows():
             key = f"{row['_ecn']}|{row['_date']}"
+
+            # Location handling
+            loc_raw = ''
+            if actual_cols.get('location') and actual_cols['location'] in df.columns:
+                loc_raw = row[actual_cols['location']]
+
             roster_dict[key] = {
                 'Project': str(row[actual_cols['project']]).strip() if pd.notna(row[actual_cols['project']]) else '',
                 'Sub-Process': str(row[actual_cols['sub']]).strip() if pd.notna(row[actual_cols['sub']]) else '',
@@ -433,24 +422,21 @@ def parse_roster(file_bytes):
                 'Supervisor': str(row[actual_cols['super']]).strip() if pd.notna(row[actual_cols['super']]) else '',
                 'Billable/Buffer': str(row[actual_cols['bill']]).strip() if pd.notna(row[actual_cols['bill']]) else '',
                 'Tagging': str(row[actual_cols['tagging']]).strip() if pd.notna(row[actual_cols['tagging']]) else '',
-                'Active/Inactive': str(row[actual_cols['active']]).strip() if pd.notna(row[actual_cols['active']]) else ''  # NEW
+                'Active/Inactive': str(row[actual_cols['active']]).strip() if pd.notna(row[actual_cols['active']]) else '',
+                'Location': map_location(loc_raw)
             }
-
     return roster_dict
-
 
 @st.cache_data(show_spinner=False)
 def parse_leave(file_bytes):
     df = pd.read_excel(BytesIO(file_bytes), sheet_name='LEAVE TRANSACTIONS REPORT')
     df.columns = [str(c).strip() for c in df.columns]
-
     def find_col(target):
         t = target.lower().replace('/', '').replace('-', '').replace(' ', '')
         for c in df.columns:
             if c.lower().replace('/', '').replace('-', '').replace(' ', '') == t:
                 return c
         return target
-
     cols = {
         'id': find_col('EmployeeID'),
         'type': find_col('LeaveTypeName'),
@@ -458,32 +444,25 @@ def parse_leave(file_bytes):
         'to': find_col('DateTo'),
         'status': find_col('LeaveStatus')
     }
-
     df = df[df[cols['status']].astype(str).str.strip().str.lower() == 'approved']
-
     leave_dict = {}
     for _, row in df.iterrows():
         emp_id = str(row[cols['id']]).strip()
         if not emp_id:
             continue
-
         norm_id = normalize_id(emp_id)
         is_sick = str(row[cols['type']]).strip().lower() == 'sick'
-
         try:
             d_from = pd.to_datetime(row[cols['from']])
             d_to = pd.to_datetime(row[cols['to']])
         except:
             continue
-
         dates = pd.date_range(d_from, d_to)
         for d in dates:
             nd = normalize_date(d)
             if nd:
                 leave_dict[f"{norm_id}|{nd}"] = {'is_sick': is_sick}
-
     return leave_dict
-
 
 @st.cache_data(show_spinner=False)
 def parse_holiday_override(file_bytes):
@@ -494,55 +473,46 @@ def parse_holiday_override(file_bytes):
     """
     df = pd.read_excel(BytesIO(file_bytes))
     df.columns = [str(c).strip() for c in df.columns]
-
     def find_col(target):
         t = target.lower().replace('/', '').replace('-', '').replace(' ', '').replace('_', '')
         for c in df.columns:
             if c.lower().replace('/', '').replace('-', '').replace(' ', '').replace('_', '') == t:
                 return c
         return target
-
     client_col = find_col('Client')
     sub_col = find_col('Sub-process')
     date_col = find_col('Date')
-
     overrides = []
     for _, row in df.iterrows():
         client = str(row[client_col]).strip() if pd.notna(row[client_col]) else ''
         sub = str(row[sub_col]).strip() if pd.notna(row[sub_col]) else ''
         date_val = normalize_date(row[date_col])
-
         if client and date_val:
             overrides.append({
                 'Client': client.upper(),
                 'Sub-Process': sub.upper(),
                 'Date': date_val
             })
-
     return overrides
 
-
 # ─── Business Logic ──────────────────────────────────────────────────────────
-
 def get_roster_info(roster_dict, id_number, date_str):
     key = f"{normalize_id(id_number)}|{date_str}"
     return roster_dict.get(key, {
         'Project': '', 'Sub-Process': '', 'Role': '',
         'Supervisor': '', 'Billable/Buffer': '', 'Tagging': '',
-        'Active/Inactive': ''       # NEW
+        'Active/Inactive': '',
+        'Location': 'Clark'
     })
-
 
 def get_leave_info(leave_dict, id_number, date_str):
     key = f"{normalize_id(id_number)}|{date_str}"
     return leave_dict.get(key, None)
 
-
 def is_leave_shift(shift_upper: str) -> bool:
     """
     Returns True for shift patterns that are legitimate scheduled exceptions —
     Absent must never be 1 for these, even when Days Present = 0 and On Leave = 1.
-
     Covered:
       HOLIDAY  (exact)
       <time> (PAID HOLIDAY)
@@ -567,16 +537,12 @@ def is_leave_shift(shift_upper: str) -> bool:
             return True
     return False
 
-
 def has_time_pattern(shift_upper: str) -> bool:
     """True if shift string contains a time range like 09:30 PM TO 06:30 AM."""
     return ' TO ' in shift_upper and ('AM' in shift_upper or 'PM' in shift_upper)
 
-
 # ─── Shift Fallback (for Late calc on ON LEAVE / HOLIDAY rows) ───────────────
-
 DEFAULT_SHIFT = '09:00 PM To 06:00 AM'
-
 
 def needs_shift_fallback(shift_upper: str) -> bool:
     """
@@ -589,7 +555,6 @@ def needs_shift_fallback(shift_upper: str) -> bool:
     if shift_upper in ('REST DAY', 'REST DAY AND HOLIDAY'):
         return False
     return shift_upper in ('ON LEAVE', 'HOLIDAY')
-
 
 def resolve_shift_fallback(emp_records):
     """
@@ -608,16 +573,13 @@ def resolve_shift_fallback(emp_records):
         shift_upper = str(rec.get('Shift', '')).strip().upper()
         if not needs_shift_fallback(shift_upper):
             continue
-
         resolved = None
-
         # Nearest past scheduled (time-based) shift
         for j in range(i - 1, -1, -1):
             prev_upper = str(emp_records[j].get('Shift', '')).strip().upper()
             if has_time_pattern(prev_upper):
                 resolved = emp_records[j]['Shift']
                 break
-
         # Nearest future scheduled (time-based) shift
         if resolved is None:
             for j in range(i + 1, n):
@@ -625,13 +587,10 @@ def resolve_shift_fallback(emp_records):
                 if has_time_pattern(next_upper):
                     resolved = emp_records[j]['Shift']
                     break
-
         # Final fallback
         if resolved is None:
             resolved = DEFAULT_SHIFT
-
         rec['_late_shift_ref'] = resolved
-
 
 def is_scheduled(shift_value, days_present, biologs):
     if not shift_value:
@@ -639,7 +598,6 @@ def is_scheduled(shift_value, days_present, biologs):
     shift = str(shift_value).strip().upper()
     biologs_upper = str(biologs).strip().upper() if biologs else ''
     has_time = ' TO ' in shift and ('AM' in shift or 'PM' in shift)
-
     exact_non_scheduled = ['NOT YET HIRED', 'SEPARATED', 'ON LEAVE']
     for phrase in exact_non_scheduled:
         if shift == phrase:
@@ -647,22 +605,16 @@ def is_scheduled(shift_value, days_present, biologs):
                 if days_present == '1' or biologs_upper == 'NO LOGS':
                     return '1'
             return '0'
-
     if shift == 'REST DAY' or shift == 'REST DAY AND HOLIDAY':
         return '0'
-
     if has_time and ('REST DAY' in shift or 'REST DAY AND HOLIDAY' in shift):
         return '1'
-
     if has_time:
         return '1'
-
     for marker in ['NOT YET HIRED', 'SEPARATED', 'ON LEAVE', 'REST DAY', 'REST DAY AND HOLIDAY']:
         if marker in shift:
             return '0'
-
     return '1'
-
 
 def check_holiday_override(overrides, project, sub_process, date_str):
     """
@@ -671,11 +623,9 @@ def check_holiday_override(overrides, project, sub_process, date_str):
     """
     if not overrides:
         return False
-
     project_upper = str(project).strip().upper() if project else ''
     sub_upper = str(sub_process).strip().upper() if sub_process else ''
     date_norm = normalize_date(date_str)
-
     for ov in overrides:
         if ov['Client'] != project_upper:
             continue
@@ -684,13 +634,10 @@ def check_holiday_override(overrides, project, sub_process, date_str):
         if ov['Sub-Process'] and ov['Sub-Process'] != sub_upper:
             continue
         return True
-
     return False
-
 
 def merge_records(records, roster_dict, leave_dict, holiday_overrides):
     merged = []
-
     for record in records:
         id_num = record['ID Number']
         date_str = record['Date']
@@ -711,18 +658,18 @@ def merge_records(records, roster_dict, leave_dict, holiday_overrides):
         )
         if computed_late != '':
             record['Late'] = computed_late
-        # ═══════════════════════════════════════════════════════════════════
 
+        # ═══════════════════════════════════════════════════════════════════
         roster_info = get_roster_info(roster_dict, id_num, date_str) if roster_dict else {
             'Project': '', 'Sub-Process': '', 'Role': '',
             'Supervisor': '', 'Billable/Buffer': '', 'Tagging': '',
-            'Active/Inactive': ''       # NEW
+            'Active/Inactive': '',
+            'Location': 'Clark'
         }
 
         # ═══════════════════════════════════════════════════════════════════
         #  PHASE 1 — INITIAL / BASE LOGIC
         # ═══════════════════════════════════════════════════════════════════
-
         # ── Initial Leave / Absent from Leave Transactions ─────────────────
         on_leave = '0'
         absent = '0'
@@ -777,8 +724,7 @@ def merge_records(records, roster_dict, leave_dict, holiday_overrides):
 
         # ═══════════════════════════════════════════════════════════════════
         #  PHASE 2 — USER OVERRIDE RULES (run after initial code finishes)
-        # ═════════════════════════════════════════════════════════════════==
-
+        # ═══════════════════════════════════════════════════════════════════
         # Rule A ── REST DAY AND HOLIDAY exact + On Leave + no logs
         #            → Is Scheduled = 1  (agent is Scheduled but on Leave)
         if (sched == '0' and on_leave == '1' and days_present == '0' and absent == '0' and
@@ -816,7 +762,7 @@ def merge_records(records, roster_dict, leave_dict, holiday_overrides):
 
         # ═══════════════════════════════════════════════════════════════════
         #  PHASE 3 — HOLIDAY OVERRIDE TABLE (absolute last)
-        # ═════════════════════════════════════════════════════════════════==
+        # ═══════════════════════════════════════════════════════════════════
         if holiday_overrides and check_holiday_override(
             holiday_overrides,
             roster_info.get('Project', ''),
@@ -836,7 +782,7 @@ def merge_records(records, roster_dict, leave_dict, holiday_overrides):
         #  column. On Leave / Absent / Is Scheduled above were already
         #  decided using the original text, so this is purely cosmetic
         #  and runs last so it never overrides the Holiday Override rule.
-        # ═════════════════════════════════════════════════════════════════==
+        # ═══════════════════════════════════════════════════════════════════
         if record.get('_late_shift_ref') and shift_upper in ('ON LEAVE', 'HOLIDAY'):
             record['Shift'] = record['_late_shift_ref']
 
@@ -848,44 +794,35 @@ def merge_records(records, roster_dict, leave_dict, holiday_overrides):
             'Is Scheduled': sched,
             'Tagging': roster_info.get('Tagging', '')
         })
-
     return merged
 
-
 # ─── Export Helper ───────────────────────────────────────────────────────────
-
 def to_excel_bytes(df: pd.DataFrame) -> bytes:
     out = BytesIO()
     df_export = df.copy()
-
     int_cols = ['Days Present', 'Absent', 'On Leave', 'Is Scheduled']
     float_cols = ['Late', 'Undertime', 'Total Hours Worked', 'Total Hours']
-
     for c in int_cols:
         if c in df_export.columns:
             df_export[c] = pd.to_numeric(df_export[c], errors='coerce').fillna(0).astype(int)
     for c in float_cols:
         if c in df_export.columns:
             df_export[c] = pd.to_numeric(df_export[c], errors='coerce').fillna(0.0)
-
     with pd.ExcelWriter(out, engine='openpyxl') as writer:
         df_export.to_excel(writer, index=False, sheet_name='Merged')
     return out.getvalue()
 
-
 # ─── Column Display Order ────────────────────────────────────────────────────
-
 DISPLAY_COLS = [
     'Name', 'ID Number', 'Days Present', 'Absent',
     'Date', 'Day', 'Shift Type', 'Shift', 'Biologs',
     'Late', 'Undertime', 'Total Hours Worked', 'Total Hours',
     'Project', 'Sub-Process', 'Role', 'Supervisor', 'Billable/Buffer', 'Tagging',
-    'On Leave', 'Is Scheduled', 'Active/Inactive'   # NEW: last column
+    'On Leave', 'Is Scheduled', 'Active/Inactive',
+    'Location'
 ]
 
-
 # ─── Styling Function ────────────────────────────────────────────────────────
-
 def get_column_config():
     """Return column_config for st.dataframe — works on all Streamlit versions."""
     return {
@@ -910,19 +847,16 @@ def get_column_config():
         'Tagging':           st.column_config.TextColumn('Tagging', width='small'),
         'On Leave':          st.column_config.NumberColumn('On Leave', width='small', format='%d'),
         'Is Scheduled':      st.column_config.NumberColumn('Is Scheduled', width='small', format='%d'),
-        'Active/Inactive':   st.column_config.TextColumn('Active/Inactive', width='small'),   # NEW
+        'Active/Inactive':   st.column_config.TextColumn('Active/Inactive', width='small'),
+        'Location':          st.column_config.TextColumn('Location', width='small'),
     }
 
-
 # ─── Session State Init ──────────────────────────────────────────────────────
-
 for key in ('attendance_records', 'employees_dict', 'roster_dict', 'leave_dict', 'holiday_overrides', 'merged_df'):
     if key not in st.session_state:
         st.session_state[key] = None
 
-
 # ─── Sidebar ─────────────────────────────────────────────────────────────────
-
 with st.sidebar:
     st.markdown('<div class="app-header">ATD CLK Generator</div>', unsafe_allow_html=True)
     st.markdown('<div class="app-subheader">Attendance · Roster · Leave · Holiday Override</div>', unsafe_allow_html=True)
@@ -1019,9 +953,7 @@ with st.sidebar:
         unsafe_allow_html=True
     )
 
-
 # ─── Main Content ─────────────────────────────────────────────────────────────
-
 st.markdown('<div class="app-header">Attendance Generator of Clark using Sprout with Roster</div>', unsafe_allow_html=True)
 st.markdown('<div class="app-subheader">Load files in the sidebar → Merge → Filter · Export</div>', unsafe_allow_html=True)
 
@@ -1051,7 +983,6 @@ st.markdown('<br>', unsafe_allow_html=True)
 
 if st.session_state.merged_df is not None:
     df = st.session_state.merged_df
-
     total_records = len(df)
     total_employees = df['Name'].nunique() if 'Name' in df.columns else 0
     total_absent = int(df['Absent'].astype(str).eq('1').sum()) if 'Absent' in df.columns else 0
@@ -1069,6 +1000,7 @@ if st.session_state.merged_df is not None:
 
     view_df = df
     excel_bytes = to_excel_bytes(view_df)
+
     st.download_button(
         label="⬇ Export Excel",
         data=excel_bytes,
@@ -1082,8 +1014,8 @@ if st.session_state.merged_df is not None:
             st.caption(f"📅 Date range: **{dates[0]}** → **{dates[-1]}**  ·  Showing **{len(view_df):,}** records")
 
     st.markdown('<br>', unsafe_allow_html=True)
-
     st.markdown('<div class="section-label">Records</div>', unsafe_allow_html=True)
+
     st.dataframe(
         view_df,
         use_container_width=True,
@@ -1091,7 +1023,6 @@ if st.session_state.merged_df is not None:
         hide_index=True,
         column_config=get_column_config(),
     )
-
 else:
     st.markdown('<br>' * 3, unsafe_allow_html=True)
     st.markdown(
