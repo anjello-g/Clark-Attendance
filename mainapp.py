@@ -1,6 +1,7 @@
 """
 Attendance Detailed Viewer - Streamlit Version
 Reads AttendanceReport Excel + Main Roster + Leave Transactions + Holiday Override
+Now supports MULTIPLE Attendance and Leave files
 """
 import streamlit as st
 import pandas as pd
@@ -321,7 +322,6 @@ def parse_roster(file_bytes):
     xls = pd.ExcelFile(BytesIO(file_bytes))
     sheet_names = xls.sheet_names
     roster_dict = {}
-
     formats = [
         {
             'sheet': 'Headcount',
@@ -354,7 +354,6 @@ def parse_roster(file_bytes):
             }
         }
     ]
-
     def map_location(raw):
         """Apply the Location mapping rules."""
         if pd.isna(raw) or str(raw).strip() == '':
@@ -371,14 +370,11 @@ def parse_roster(file_bytes):
         if val == 'ILOILO':
             return 'Iloilo'
         return 'Clark'
-
     for fmt in formats:
         if fmt['sheet'] not in sheet_names:
             continue
-
         df = pd.read_excel(BytesIO(file_bytes), sheet_name=fmt['sheet'])
         df.columns = [str(c).strip() for c in df.columns]
-
         # Flexible column matching
         actual_cols = {}
         for key, target in fmt['columns'].items():
@@ -400,21 +396,17 @@ def parse_roster(file_bytes):
                     if found:
                         break
             actual_cols[key] = found if found else target
-
         # Extract key columns
         df['_ecn'] = df[actual_cols['ecn']].astype(str).str.strip().apply(normalize_id)
         df['_date'] = df[actual_cols['date']].apply(normalize_date)
         valid = (df['_ecn'] != '') & (df['_date'] != '')
         df = df[valid]
-
         for _, row in df.iterrows():
             key = f"{row['_ecn']}|{row['_date']}"
-
             # Location handling
             loc_raw = ''
             if actual_cols.get('location') and actual_cols['location'] in df.columns:
                 loc_raw = row[actual_cols['location']]
-
             roster_dict[key] = {
                 'Project': str(row[actual_cols['project']]).strip() if pd.notna(row[actual_cols['project']]) else '',
                 'Sub-Process': str(row[actual_cols['sub']]).strip() if pd.notna(row[actual_cols['sub']]) else '',
@@ -642,7 +634,6 @@ def merge_records(records, roster_dict, leave_dict, holiday_overrides):
         id_num = record['ID Number']
         date_str = record['Date']
         days_present = record['Days Present']
-
         # ═══════════════════════════════════════════════════════════════════
         #  CUSTOM LATE CALCULATION — replaces raw Late from Sprout
         #  Uses a borrowed shift reference (_late_shift_ref) when the row's
@@ -658,7 +649,6 @@ def merge_records(records, roster_dict, leave_dict, holiday_overrides):
         )
         if computed_late != '':
             record['Late'] = computed_late
-
         # ═══════════════════════════════════════════════════════════════════
         roster_info = get_roster_info(roster_dict, id_num, date_str) if roster_dict else {
             'Project': '', 'Sub-Process': '', 'Role': '',
@@ -666,7 +656,6 @@ def merge_records(records, roster_dict, leave_dict, holiday_overrides):
             'Active/Inactive': '',
             'Location': 'Clark'
         }
-
         # ═══════════════════════════════════════════════════════════════════
         #  PHASE 1 — INITIAL / BASE LOGIC
         # ═══════════════════════════════════════════════════════════════════
@@ -684,28 +673,22 @@ def merge_records(records, roster_dict, leave_dict, holiday_overrides):
                         absent = '1'
                     else:
                         on_leave = '1'
-
         # ── Scheduled flag from shift text ─────────────────────────────────
         sched = is_scheduled(record.get('Shift', ''), days_present, record.get('Biologs', ''))
-
         # Clean-up: unscheduled + absent should not co-exist
         if sched == '0' and absent == '1':
             absent = '0'
-
         shift_upper = str(record.get('Shift', '')).strip().upper()
         biologs_upper = str(record.get('Biologs', '')).strip().upper()
-
         # REST DAY exact + NO LOGS + On Leave → clear On Leave
         if shift_upper == 'REST DAY' and biologs_upper == 'NO LOGS' and on_leave == '1':
             on_leave = '0'
-
         # Exact "ON LEAVE" shift + NO LOGS + NO leave record → Absent
         if shift_upper == 'ON LEAVE' and biologs_upper == 'NO LOGS':
             has_leave_record = leave_dict and get_leave_info(leave_dict, id_num, date_str) is not None
             if not has_leave_record:
                 on_leave = '0'
                 absent = '1'
-
         # ── Base Absent logic for NO LOGS ──────────────────────────────────
         if sched == '1' and biologs_upper == 'NO LOGS':
             is_rest_variant = (
@@ -717,11 +700,9 @@ def merge_records(records, roster_dict, leave_dict, holiday_overrides):
             is_on_leave_exact = shift_upper == 'ON LEAVE'
             if not is_rest_variant and not is_on_leave_exact:
                 absent = '1'
-
         # Guard: shift patterns that signal holiday/leave are never Absent
         if is_leave_shift(shift_upper):
             absent = '0'
-
         # ═══════════════════════════════════════════════════════════════════
         #  PHASE 2 — USER OVERRIDE RULES (run after initial code finishes)
         # ═══════════════════════════════════════════════════════════════════
@@ -730,27 +711,23 @@ def merge_records(records, roster_dict, leave_dict, holiday_overrides):
         if (sched == '0' and on_leave == '1' and days_present == '0' and absent == '0' and
             shift_upper == 'REST DAY AND HOLIDAY' and biologs_upper == 'NO LOGS'):
             sched = '1'
-
         # Rule E ── Time-pattern shift ending in (REST DAY) or (REST DAY AND HOLIDAY)
         #            → Is Scheduled = 0  (agent is not Scheduled)
         if (sched == '1' and on_leave == '0' and days_present == '0' and absent == '0' and
             biologs_upper == 'NO LOGS' and has_time_pattern(shift_upper) and
             ('(REST DAY)' in shift_upper or '(REST DAY AND HOLIDAY)' in shift_upper)):
             sched = '0'
-
         # Rule D ── Time-pattern shift ending in (UNPAID LEAVE) or (HALF DAY LEAVE)
         #            → On Leave = 1  (Agent is Scheduled but on Leave)
         if (sched == '1' and on_leave == '0' and days_present == '0' and absent == '0' and
             biologs_upper == 'NO LOGS' and has_time_pattern(shift_upper) and
             ('(UNPAID LEAVE)' in shift_upper or '(HALF DAY LEAVE)' in shift_upper)):
             on_leave = '1'
-
         # Rule B ── Scheduled + On Leave + Absent=1 + no logs
         #            → Absent = 0  (agent is Scheduled but on Leave, not absent)
         if (sched == '1' and on_leave == '1' and days_present == '0' and absent == '1' and
             biologs_upper == 'NO LOGS'):
             absent = '0'
-
         # Rule C ── Holiday variants + not on leave + no logs
         #            → Absent = 1  (agent is Scheduled but Absent)
         if (sched == '1' and on_leave == '0' and days_present == '0' and absent == '0' and
@@ -759,7 +736,6 @@ def merge_records(records, roster_dict, leave_dict, holiday_overrides):
              (has_time_pattern(shift_upper) and
               ('(HOLIDAY)' in shift_upper or '(PAID HOLIDAY)' in shift_upper or '(UNPAID HOLIDAY)' in shift_upper)))):
             absent = '1'
-
         # ═══════════════════════════════════════════════════════════════════
         #  PHASE 3 — HOLIDAY OVERRIDE TABLE (absolute last)
         # ═══════════════════════════════════════════════════════════════════
@@ -775,7 +751,6 @@ def merge_records(records, roster_dict, leave_dict, holiday_overrides):
                 sched = '0'
                 record['Shift'] = 'SPECIAL HOLIDAY'
                 shift_upper = 'SPECIAL HOLIDAY'
-
         # ═══════════════════════════════════════════════════════════════════
         #  PHASE 4 — DISPLAY SWAP: show the borrowed/default schedule
         #  instead of the bare "ON LEAVE" / "HOLIDAY" text in the Shift
@@ -785,7 +760,6 @@ def merge_records(records, roster_dict, leave_dict, holiday_overrides):
         # ═══════════════════════════════════════════════════════════════════
         if record.get('_late_shift_ref') and shift_upper in ('ON LEAVE', 'HOLIDAY'):
             record['Shift'] = record['_late_shift_ref']
-
         merged.append({
             **record,
             **roster_info,
@@ -862,24 +836,32 @@ with st.sidebar:
     st.markdown('<div class="app-subheader">Attendance · Roster · Leave · Holiday Override</div>', unsafe_allow_html=True)
     st.markdown('---')
 
-    # ── Attendance File
+    # ── Attendance File (MULTIPLE)
     st.markdown('### 01 · Attendance')
-    att_file = st.file_uploader(
-        "Attendance Excel", type=['xlsx', 'xls'], key='att_upload',
-        help="Must contain a 'Detailed' sheet"
+    att_files = st.file_uploader(
+        "Attendance Excel (multiple allowed)",
+        type=['xlsx', 'xls'],
+        key='att_upload',
+        accept_multiple_files=True,
+        help="Must contain a 'Detailed' sheet. You can upload multiple files."
     )
-    if att_file:
-        with st.spinner("Parsing attendance..."):
+    if att_files:
+        with st.spinner(f"Parsing {len(att_files)} attendance file(s)..."):
             try:
-                records, emp_dict = parse_attendance(att_file.read())
-                st.session_state.attendance_records = records
-                st.session_state.employees_dict = emp_dict
+                all_records = []
+                all_emp_dict = {}
+                for f in att_files:
+                    records, emp_dict = parse_attendance(f.read())
+                    all_records.extend(records)
+                    all_emp_dict.update(emp_dict)  # later files overwrite same employee name if conflict
+                st.session_state.attendance_records = all_records
+                st.session_state.employees_dict = all_emp_dict
                 st.session_state.merged_df = None
-                st.success(f"✓ {len(records):,} records · {len(emp_dict)} employees")
+                st.success(f"✓ {len(all_records):,} records · {len(all_emp_dict)} employees from {len(att_files)} file(s)")
             except Exception as e:
                 st.error(f"Error: {e}")
 
-    # ── Roster File
+    # ── Roster File (single)
     st.markdown('### 02 · Roster')
     roster_file = st.file_uploader(
         "Roster Excel", type=['xlsx', 'xls'], key='roster_upload',
@@ -895,23 +877,29 @@ with st.sidebar:
             except Exception as e:
                 st.error(f"Error: {e}")
 
-    # ── Leave File
+    # ── Leave File (MULTIPLE)
     st.markdown('### 03 · Leave')
-    leave_file = st.file_uploader(
-        "Leave Excel", type=['xlsx', 'xls'], key='leave_upload',
-        help="Must contain a 'LEAVE TRANSACTIONS REPORT' sheet"
+    leave_files = st.file_uploader(
+        "Leave Excel (multiple allowed)",
+        type=['xlsx', 'xls'],
+        key='leave_upload',
+        accept_multiple_files=True,
+        help="Must contain a 'LEAVE TRANSACTIONS REPORT' sheet. You can upload multiple files."
     )
-    if leave_file:
-        with st.spinner("Parsing leave..."):
+    if leave_files:
+        with st.spinner(f"Parsing {len(leave_files)} leave file(s)..."):
             try:
-                leave_dict = parse_leave(leave_file.read())
-                st.session_state.leave_dict = leave_dict
+                combined_leave = {}
+                for f in leave_files:
+                    leave_dict = parse_leave(f.read())
+                    combined_leave.update(leave_dict)  # later files overwrite same key if conflict
+                st.session_state.leave_dict = combined_leave
                 st.session_state.merged_df = None
-                st.success(f"✓ {len(leave_dict):,} daily leave entries")
+                st.success(f"✓ {len(combined_leave):,} daily leave entries from {len(leave_files)} file(s)")
             except Exception as e:
                 st.error(f"Error: {e}")
 
-    # ── Holiday Override File
+    # ── Holiday Override File (single)
     st.markdown('### 04 · Holiday Override')
     holiday_file = st.file_uploader(
         "Holiday Override Excel", type=['xlsx', 'xls'], key='holiday_upload',
@@ -944,12 +932,13 @@ with st.sidebar:
         st.success("Merge complete!")
 
     if not can_merge:
-        st.caption("Load the Attendance file to enable merge.")
+        st.caption("Load the Attendance file(s) to enable merge.")
 
     st.markdown('---')
     st.markdown(
         '<div style="font-family:IBM Plex Mono;font-size:0.65rem;color:#3a4a6a;text-align:center;">'
-        'Roster + Leave + Holiday Override are optional.<br>Attendance is required.</div>',
+        'Roster + Leave + Holiday Override are optional.<br>Attendance is required.<br>'
+        'Multiple Attendance & Leave files supported.</div>',
         unsafe_allow_html=True
     )
 
@@ -988,34 +977,27 @@ if st.session_state.merged_df is not None:
     total_absent = int(df['Absent'].astype(str).eq('1').sum()) if 'Absent' in df.columns else 0
     total_on_leave = int(df['On Leave'].astype(str).eq('1').sum()) if 'On Leave' in df.columns else 0
     roster_matched = int((df['Project'].astype(str) != '').sum()) if 'Project' in df.columns else 0
-
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Total Records", f"{total_records:,}")
     m2.metric("Employees", f"{total_employees:,}")
     m3.metric("Absent Days", f"{total_absent:,}")
     m4.metric("On Leave Days", f"{total_on_leave:,}")
     m5.metric("Roster Matches", f"{roster_matched:,}")
-
     st.markdown('<br>', unsafe_allow_html=True)
-
     view_df = df
     excel_bytes = to_excel_bytes(view_df)
-
     st.download_button(
         label="⬇ Export Excel",
         data=excel_bytes,
         file_name="Attendance_Merged.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
-
     if 'Date' in view_df.columns:
         dates = view_df['Date'][view_df['Date'] != ''].tolist()
         if dates:
             st.caption(f"📅 Date range: **{dates[0]}** → **{dates[-1]}**  ·  Showing **{len(view_df):,}** records")
-
     st.markdown('<br>', unsafe_allow_html=True)
     st.markdown('<div class="section-label">Records</div>', unsafe_allow_html=True)
-
     st.dataframe(
         view_df,
         use_container_width=True,
